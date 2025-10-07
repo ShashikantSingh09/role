@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenySensitiveDataReads",
+      "Effect": "Deny",
+      "Action": [
+        "secretsmanager:GetSecretValue",
+        "ssm:GetParameter",
+        "ssm:GetParameters",
+        "ssm:GetParametersByPath",
+        "kms:Decrypt",
+        "s3:GetObject",
+        "s3:GetObjectVersion",
+        "s3-object-lambda:GetObject",
+        "dynamodb:GetItem",
+        "dynamodb:BatchGetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan",
+        "rds-data:ExecuteStatement",
+        "rds-data:BatchExecuteStatement",
+        "redshift-data:ExecuteStatement",
+        "redshift-data:GetStatementResult",
+        "athena:GetQueryResults",
+        "athena:GetQueryResultsStream"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
