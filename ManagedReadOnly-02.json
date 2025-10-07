@@ -1,0 +1,16 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManagedReadOnly02",
+      "Effect": "Allow",
+      "Action": [
+        "ecr-public:BatchCheckLayerAvailability",
+        "ecr-public:Describe*",
+        "ecr-public:Get*",
+        "ecr-public:List*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
