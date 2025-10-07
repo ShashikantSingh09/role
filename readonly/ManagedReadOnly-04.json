@@ -1,0 +1,15 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManagedReadOnly04",
+      "Effect": "Allow",
+      "Action": [
+        "pricing:Describe*",
+        "pricing:Get*",
+        "pricing:List*"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
