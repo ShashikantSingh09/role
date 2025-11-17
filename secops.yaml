@@ -1,7 +1,17 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Creation of ONLY Google SecOps (Chronicle) Kinesis Firehose delivery stream for WAF Logs – JPro Stage Environment"
+Description: "Reusable Google SecOps (Chronicle) Kinesis Firehose delivery stream for WAF Logs"
 
 Parameters:
+  Environment:
+    Description: Deployment environment (dev, stage, prod, qa)
+    Type: String
+    AllowedValues:
+      - dev
+      - stage
+      - qa
+      - prod
+    Default: stage
+
   FMSMonitoringBucketName:
     Description: Enter the bucket name for the WAF logs backup
     Type: String
@@ -15,35 +25,39 @@ Parameters:
       - /account_config/region_prefix
 
   FMSLogsRoleName:
-    Description: Enter the name of waf logs Kinesis delivery role
+    Description: Kinesis delivery role name (env-prefixed automatically)
     Type: String
-    Default: "jpro-stage-waf-firehose-delivery-role"
+    Default: "waf-firehose-delivery-role"
 
   LogTransformationFunctionName:
-    Description: Name of Lambda function used to transform WAF logs
+    Description: Lambda function used to transform WAF logs
     Type: String
     Default: "waf-logs-transformation"
 
+  # ------------------------------------------------------
+  # Google SecOps Parameters
+  # ------------------------------------------------------
   GoogleSecOpsHECToken:
-    Description: Store Google SecOps HTTP endpoint token in Secrets Manager
+    Description: Name of the Secrets Manager token for Google SecOps
     Type: String
-    Default: jpro_stage_waf_google_secops_token
+    Default: "waf_google_secops_token"
 
   GoogleSecOpsEndpoint:
-    Description: Google SecOps (Chronicle) HTTP endpoint URL
+    Description: Google SecOps HTTP endpoint URL
     Type: String
     Default: "https://chronicle-forwarder.googleapis.com/v1/udmevents"
 
   GoogleSecOpsDeliveryStreamName:
-    Description: Name for Google SecOps delivery stream
+    Description: Name of the Google SecOps Kinesis Firehose stream
     Type: String
-    Default: "aws-waf-logs-jpro-stage-google-secops"
+    Default: "aws-waf-logs-google-secops"
 
 Resources:
+
   DeliveryRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${RegionPrefix}-${FMSLogsRoleName}"
+      RoleName: !Sub "${RegionPrefix}-${Environment}-${FMSLogsRoleName}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -51,8 +65,7 @@ Resources:
             Principal:
               Service:
                 - firehose.amazonaws.com
-            Action:
-              - sts:AssumeRole
+            Action: "sts:AssumeRole"
       Path: /
       Policies:
         - PolicyName: firehose-s3-logs-and-secrets
@@ -74,14 +87,16 @@ Resources:
                   - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
                   - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}/*"
 
+              # CloudWatch logging
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                 Resource:
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${GoogleSecOpsDeliveryStreamName}:*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${Environment}-${GoogleSecOpsDeliveryStreamName}:*"
 
+              # Lambda transform
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
@@ -89,18 +104,19 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LogTransformationFunctionName}"
 
+              # Secrets Manager for Google SecOps token
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${GoogleSecOpsHECToken}*"
+                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Environment}-${GoogleSecOpsHECToken}*"
 
   GoogleSecOpsDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
-      DeliveryStreamName: !Ref GoogleSecOpsDeliveryStreamName
+      DeliveryStreamName: !Sub "${Environment}-${GoogleSecOpsDeliveryStreamName}"
       DeliveryStreamType: DirectPut
-      
+
       HttpEndpointDestinationConfiguration:
 
         EndpointConfiguration:
@@ -113,7 +129,7 @@ Resources:
 
         CloudWatchLoggingOptions:
           Enabled: true
-          LogGroupName: !Sub "/aws/kinesisfirehose/${GoogleSecOpsDeliveryStreamName}"
+          LogGroupName: !Sub "/aws/kinesisfirehose/${Environment}-${GoogleSecOpsDeliveryStreamName}"
           LogStreamName: "HttpEndpointDelivery"
 
         ProcessingConfiguration:
@@ -134,22 +150,22 @@ Resources:
         S3Configuration:
           BucketARN: !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
           CompressionFormat: GZIP
-          Prefix: "waf-logs/google-secops/failed/"
+          Prefix: !Sub "${Environment}/waf-logs/google-secops/failed/"
           RoleARN: !GetAtt DeliveryRole.Arn
           BufferingHints:
             SizeInMBs: 5
             IntervalInSeconds: 60
           CloudWatchLoggingOptions:
             Enabled: true
-            LogGroupName: !Sub "/aws/kinesisfirehose/${GoogleSecOpsDeliveryStreamName}"
+            LogGroupName: !Sub "/aws/kinesisfirehose/${Environment}-${GoogleSecOpsDeliveryStreamName}"
             LogStreamName: "S3Backup"
 
         SecretsManagerConfiguration:
           Enabled: true
           RoleARN: !GetAtt DeliveryRole.Arn
-          SecretARN: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${GoogleSecOpsHECToken}"
+          SecretARN: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Environment}-${GoogleSecOpsHECToken}"
 
 Outputs:
   GoogleSecOpsFirehoseStreamName:
     Description: Name of the Google SecOps Firehose delivery stream
-    Value: !Ref GoogleSecOpsDeliveryStream
+    Value: !Sub "${Environment}-${GoogleSecOpsDeliveryStreamName}"
