@@ -3,9 +3,6 @@ Description: "Reusable Google SecOps (Chronicle) Kinesis Firehose delivery strea
 
 Parameters:
 
-  # ------------------------------------------------------
-  # Environment / Firewall
-  # ------------------------------------------------------
   Environment:
     Description: Deployment environment (dev, stage, qa, prod)
     Type: String
