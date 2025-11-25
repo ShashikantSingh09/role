@@ -14,7 +14,7 @@ Parameters:
     Default: stage
 
   FirewallName:
-    Description: Short name of the firewall or policy set (e.g., waf, edge, corp-fw1)
+    Description: Short name of the firewall or policy set
     Type: String
     Default: waf
 
@@ -31,7 +31,7 @@ Parameters:
       - /account_config/region_prefix
 
   FMSLogsRoleName:
-    Description: Kinesis delivery role name (env-prefixed automatically)
+    Description: Kinesis delivery role name
     Type: String
     Default: "waf-firehose-delivery-role"
 
@@ -46,14 +46,14 @@ Parameters:
     Default: "waf_google_secops_token"
 
   GoogleSecOpsTokenValue:
-    Description: Google SecOps token (stored automatically into Secrets Manager)
+    Description: Google SecOps token
     Type: String
     NoEcho: true
 
   GoogleSecOpsEndpoint:
     Description: Google SecOps (Chronicle) HTTP endpoint URL
     Type: String
-    Default: "https://chronicle-forwarder.googleapis.com/v1/udmevents"
+    NoEcho: true
 
   GoogleSecOpsDeliveryStreamName:
     Description: Base name of the Google SecOps Kinesis Firehose stream
@@ -64,18 +64,22 @@ Parameters:
 Resources:
 
   ###########################################################
-  # Create a Secrets Manager Secret and store the token  #
+  # Create a Secrets Manager Secret containing token+URL    #
   ###########################################################
   GoogleSecOpsTokenSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
       Name: !Sub "${Environment}-${GoogleSecOpsHECToken}"
-      Description: !Sub "Google SecOps token for ${Environment} environment"
-      SecretString: !Ref GoogleSecOpsTokenValue
+      Description: !Sub "Google SecOps credentials for ${Environment} environment"
+      SecretString: !Sub |
+        {
+          "token": "${GoogleSecOpsTokenValue}",
+          "url": "${GoogleSecOpsEndpoint}"
+        }
 
 
   ###########################################################
-  # 2. IAM Role for Firehose                                #
+  # IAM Role for Firehose                                   #
   ###########################################################
   DeliveryRole:
     Type: AWS::IAM::Role
@@ -97,6 +101,7 @@ Resources:
             Version: "2012-10-17"
             Statement:
 
+              # Allow S3 backup writes
               - Effect: Allow
                 Action:
                   - s3:AbortMultipartUpload
@@ -110,6 +115,7 @@ Resources:
                   - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
                   - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}/*"
 
+              # Allow CloudWatch logging
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -118,6 +124,7 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}:*"
 
+              # Allow Lambda transformation
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
@@ -125,6 +132,7 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LogTransformationFunctionName}"
 
+              # Allow Firehose to read the secret
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
@@ -133,7 +141,7 @@ Resources:
 
 
   ###########################################################
-  # 3. Kinesis Firehose Delivery Stream                     #
+  # Kinesis Firehose Delivery Stream                        #
   ###########################################################
   GoogleSecOpsDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
@@ -196,3 +204,6 @@ Outputs:
   GoogleSecOpsFirehoseStreamName:
     Description: Name of the Google SecOps Firehose delivery stream
     Value: !Sub "${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}"
+
+
+https://aws.amazon.com/blogs/big-data/stream-data-to-an-http-endpoint-with-amazon-data-firehose/
