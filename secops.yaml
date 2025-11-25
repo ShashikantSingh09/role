@@ -18,6 +18,7 @@ Parameters:
     Type: String
     Default: waf
 
+  FMSMonitoringBucketName:
     Description: Enter the bucket name for the WAF logs backup
     Type: String
     Default: fms-monitoring
@@ -39,12 +40,15 @@ Parameters:
     Type: String
     Default: "waf-logs-transformation"
 
-# Google SecOps Parameters
-
   GoogleSecOpsHECToken:
-    Description: Name of the Secrets Manager token for Google SecOps
+    Description: Base secret name for Google SecOps token
     Type: String
     Default: "waf_google_secops_token"
+
+  GoogleSecOpsTokenValue:
+    Description: Google SecOps token (stored automatically into Secrets Manager)
+    Type: String
+    NoEcho: true
 
   GoogleSecOpsEndpoint:
     Description: Google SecOps (Chronicle) HTTP endpoint URL
@@ -56,8 +60,23 @@ Parameters:
     Type: String
     Default: "aws-waf-logs-google-secops"
 
+
 Resources:
 
+  ###########################################################
+  # Create a Secrets Manager Secret and store the token  #
+  ###########################################################
+  GoogleSecOpsTokenSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub "${Environment}-${GoogleSecOpsHECToken}"
+      Description: !Sub "Google SecOps token for ${Environment} environment"
+      SecretString: !Ref GoogleSecOpsTokenValue
+
+
+  ###########################################################
+  # 2. IAM Role for Firehose                                #
+  ###########################################################
   DeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -78,7 +97,6 @@ Resources:
             Version: "2012-10-17"
             Statement:
 
-              # Allow writing to S3 backup bucket
               - Effect: Allow
                 Action:
                   - s3:AbortMultipartUpload
@@ -92,7 +110,6 @@ Resources:
                   - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
                   - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}/*"
 
-              # CloudWatch logging for this env+firewall stream
               - Effect: Allow
                 Action:
                   - logs:CreateLogGroup
@@ -101,7 +118,6 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}:*"
 
-              # Lambda transform
               - Effect: Allow
                 Action:
                   - lambda:InvokeFunction
@@ -109,15 +125,16 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LogTransformationFunctionName}"
 
-              # Secrets Manager for Google SecOps token (env-scoped)
               - Effect: Allow
                 Action:
                   - secretsmanager:GetSecretValue
                 Resource:
-                  - !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Environment}-${GoogleSecOpsHECToken}*"
+                  - !Ref GoogleSecOpsTokenSecret
 
-# Google SecOps Delivery Stream
 
+  ###########################################################
+  # 3. Kinesis Firehose Delivery Stream                     #
+  ###########################################################
   GoogleSecOpsDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
@@ -125,6 +142,8 @@ Resources:
       DeliveryStreamType: DirectPut
 
       HttpEndpointDestinationConfiguration:
+
+        RoleARN: !GetAtt DeliveryRole.Arn
 
         EndpointConfiguration:
           Url: !Ref GoogleSecOpsEndpoint
@@ -170,7 +189,8 @@ Resources:
         SecretsManagerConfiguration:
           Enabled: true
           RoleARN: !GetAtt DeliveryRole.Arn
-          SecretARN: !Sub "arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${Environment}-${GoogleSecOpsHECToken}"
+          SecretARN: !Ref GoogleSecOpsTokenSecret
+
 
 Outputs:
   GoogleSecOpsFirehoseStreamName:
