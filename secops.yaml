@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: "Reusable Google SecOps (Chronicle) Kinesis Firehose delivery stream for WAF Logs"
+Description: "Google SecOps (Chronicle) integration for AWS WAF Logs via S3 and SQS"
 
 Parameters:
 
@@ -19,191 +19,74 @@ Parameters:
     Default: waf
 
   FMSMonitoringBucketName:
-    Description: Enter the bucket name for the WAF logs backup
+    Description: S3 bucket name for WAF logs (must already exist)
     Type: String
-    Default: fms-monitoring
+    Default: "fms-monitoring"
 
-  RegionPrefix:
-    Description: Prefix of the region this is being deployed in
-    Type: "AWS::SSM::Parameter::Value<String>"
-    Default: /account_config/region_prefix
-    AllowedValues:
-      - /account_config/region_prefix
-
-  FMSLogsRoleName:
-    Description: Kinesis delivery role name
+  LogPrefix:
+    Description: S3 prefix for WAF logs (optional, e.g., waf-logs/)
     Type: String
-    Default: "waf-firehose-delivery-role"
+    Default: "waf-logs/"
 
-  LogTransformationFunctionName:
-    Description: Lambda function used to transform WAF logs
+  GoogleSecOpsSQSQueueName:
+    Description: Name for the Google SecOps notification SQS queue
     Type: String
-    Default: "waf-logs-transformation"
+    Default: "google-secops-waf-logs-queue"
 
-  GoogleSecOpsHECToken:
-    Description: Base secret name for Google SecOps token
-    Type: String
-    Default: "waf_google_secops_token"
-
-  GoogleSecOpsTokenValue:
-    Description: Google SecOps token
-    Type: String
-    NoEcho: true
-
-  GoogleSecOpsEndpoint:
-    Description: Google SecOps (Chronicle) HTTP endpoint URL
-    Type: String
-    NoEcho: true
-
-  GoogleSecOpsDeliveryStreamName:
-    Description: Base name of the Google SecOps Kinesis Firehose stream
-    Type: String
-    Default: "aws-waf-logs-google-secops"
+  MaxReceiveCount:
+    Description: Maximum number of times a message can be received before being sent to DLQ
+    Type: Number
+    Default: 5
+    MinValue: 1
+    MaxValue: 1000
 
 
 Resources:
-
-  ###########################################################
-  # Create a Secrets Manager Secret containing token+URL    #
-  ###########################################################
-  GoogleSecOpsTokenSecret:
-    Type: AWS::SecretsManager::Secret
+  GoogleSecOpsDLQ:
+    Type: AWS::SQS::Queue
     Properties:
-      Name: !Sub "${Environment}-${GoogleSecOpsHECToken}"
-      Description: !Sub "Google SecOps credentials for ${Environment} environment"
-      SecretString: !Sub |
-        {
-          "token": "${GoogleSecOpsTokenValue}",
-          "url": "${GoogleSecOpsEndpoint}"
-        }
+      QueueName: !Sub "${Environment}-${FirewallName}-${GoogleSecOpsSQSQueueName}-dlq"
+      MessageRetentionPeriod: 1209600
+      ReceiveMessageWaitTimeSeconds: 20
 
-
-  ###########################################################
-  # IAM Role for Firehose                                   #
-  ###########################################################
-  DeliveryRole:
-    Type: AWS::IAM::Role
+  GoogleSecOpsSQSQueue:
+    Type: AWS::SQS::Queue
     Properties:
-      RoleName: !Sub "${RegionPrefix}-${Environment}-${FMSLogsRoleName}"
-      AssumeRolePolicyDocument:
+      QueueName: !Sub "${Environment}-${FirewallName}-${GoogleSecOpsSQSQueueName}"
+      MessageRetentionPeriod: 1209600
+      VisibilityTimeout: 300
+      ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt GoogleSecOpsDLQ.Arn
+        maxReceiveCount: !Ref MaxReceiveCount
+
+
+  GoogleSecOpsSQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref GoogleSecOpsSQSQueue
+      PolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
+          - Sid: AllowS3ToSendMessage
+            Effect: Allow
             Principal:
-              Service:
-                - firehose.amazonaws.com
+              Service: s3.amazonaws.com
             Action:
-              - sts:AssumeRole
-      Path: /
-      Policies:
-        - PolicyName: firehose-s3-logs-and-secrets
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-
-              # Allow S3 backup writes
-              - Effect: Allow
-                Action:
-                  - s3:AbortMultipartUpload
-                  - s3:GetBucketLocation
-                  - s3:GetObject
-                  - s3:ListBucket
-                  - s3:ListBucketMultipartUploads
-                  - s3:PutObject
-                  - s3:PutObjectAcl
-                Resource:
-                  - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
-                  - !Sub "arn:aws:s3:::${FMSMonitoringBucketName}/*"
-
-              # Allow CloudWatch logging
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource:
-                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}:*"
-
-              # Allow Lambda transformation
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                  - lambda:GetFunctionConfiguration
-                Resource:
-                  - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LogTransformationFunctionName}"
-
-              # Allow Firehose to read the secret
-              - Effect: Allow
-                Action:
-                  - secretsmanager:GetSecretValue
-                Resource:
-                  - !Ref GoogleSecOpsTokenSecret
-
-
-  ###########################################################
-  # Kinesis Firehose Delivery Stream                        #
-  ###########################################################
-  GoogleSecOpsDeliveryStream:
-    Type: AWS::KinesisFirehose::DeliveryStream
-    Properties:
-      DeliveryStreamName: !Sub "${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}"
-      DeliveryStreamType: DirectPut
-
-      HttpEndpointDestinationConfiguration:
-
-        RoleARN: !GetAtt DeliveryRole.Arn
-
-        EndpointConfiguration:
-          Url: !Ref GoogleSecOpsEndpoint
-          Name: "GoogleSecOps"
-
-        BufferingHints:
-          SizeInMBs: 5
-          IntervalInSeconds: 60
-
-        CloudWatchLoggingOptions:
-          Enabled: true
-          LogGroupName: !Sub "/aws/kinesisfirehose/${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}"
-          LogStreamName: "HttpEndpointDelivery"
-
-        ProcessingConfiguration:
-          Enabled: true
-          Processors:
-            - Type: Lambda
-              Parameters:
-                - ParameterName: LambdaArn
-                  ParameterValue: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${LogTransformationFunctionName}"
-
-        RequestConfiguration:
-          ContentEncoding: "GZIP"
-
-        RetryOptions:
-          DurationInSeconds: 60
-
-        S3BackupMode: FailedDataOnly
-        S3Configuration:
-          BucketARN: !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
-          CompressionFormat: GZIP
-          Prefix: !Sub "${Environment}/${FirewallName}/waf-logs/google-secops/failed/"
-          RoleARN: !GetAtt DeliveryRole.Arn
-          BufferingHints:
-            SizeInMBs: 5
-            IntervalInSeconds: 60
-          CloudWatchLoggingOptions:
-            Enabled: true
-            LogGroupName: !Sub "/aws/kinesisfirehose/${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}"
-            LogStreamName: "S3Backup"
-
-        SecretsManagerConfiguration:
-          Enabled: true
-          RoleARN: !GetAtt DeliveryRole.Arn
-          SecretARN: !Ref GoogleSecOpsTokenSecret
+              - sqs:SendMessage
+            Resource: !GetAtt GoogleSecOpsSQSQueue.Arn
+            Condition:
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:s3:::${FMSMonitoringBucketName}"
 
 
 Outputs:
-  GoogleSecOpsFirehoseStreamName:
-    Description: Name of the Google SecOps Firehose delivery stream
-    Value: !Sub "${Environment}-${FirewallName}-${GoogleSecOpsDeliveryStreamName}"
 
+  GoogleSecOpsSQSQueueURL:
+    Description: URL of the Google SecOps SQS Queue
+    Value: !Ref GoogleSecOpsSQSQueue
 
-https://aws.amazon.com/blogs/big-data/stream-data-to-an-http-endpoint-with-amazon-data-firehose/
+  GoogleSecOpsDLQURL:
+    Description: URL of the DLQ
+    Value: !Ref GoogleSecOpsDLQ
