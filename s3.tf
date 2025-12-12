@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "gd_bucket" {
-  bucket = var.gd_finding_bucket_name
+  bucket   = var.gd_finding_bucket_name
   provider = aws.us_east_2
 }
 
@@ -223,7 +223,7 @@ resource "aws_kms_key" "gd_key" {
   description             = "KMS key for GuardDuty findings"
   enable_key_rotation     = true
   deletion_window_in_days = 30
-  provider = aws.us_east_2
+  provider                = aws.us_east_2
 }
 
 resource "aws_kms_alias" "alias" {
@@ -308,9 +308,9 @@ data "aws_guardduty_detector" "regional" {
 }
 
 resource "aws_guardduty_publishing_destination" "export" {
-  detector_id      = data.aws_guardduty_detector.current.id
-  destination_arn  = aws_s3_bucket.gd_bucket.arn
-  kms_key_arn      = aws_kms_key.gd_key.arn
+  detector_id     = data.aws_guardduty_detector.regional.id
+  destination_arn = aws_s3_bucket.gd_bucket.arn
+  kms_key_arn     = aws_kms_key.gd_key.arn
   depends_on = [
     aws_s3_bucket_policy.gd_bucket_policy,
   ]
