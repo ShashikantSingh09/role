@@ -186,7 +186,8 @@ resource "aws_s3_bucket_policy" "gd_bucket_policy" {
 }
 
 resource "aws_s3_bucket_ownership_controls" "ownership" {
-  bucket = aws_s3_bucket.gd_bucket.id
+  bucket   = aws_s3_bucket.gd_bucket.id
+  provider = aws.us_east_2
   rule {
     object_ownership = "BucketOwnerPreferred"
   }
@@ -230,6 +231,7 @@ resource "aws_kms_key" "gd_key" {
 resource "aws_kms_alias" "alias" {
   name          = var.kms_alias
   target_key_id = aws_kms_key.gd_key.key_id
+  provider      = aws.us_east_2
 }
 
 data "aws_caller_identity" "current" {}
@@ -311,6 +313,7 @@ data "aws_guardduty_detector" "regional" {
 resource "aws_guardduty_publishing_destination" "export" {
   detector_id     = data.aws_guardduty_detector.regional.id
   destination_arn = aws_s3_bucket.gd_bucket.arn
+  provider        = aws.us_east_2
   kms_key_arn     = aws_kms_key.gd_key.arn
   depends_on = [
     aws_s3_bucket_policy.gd_bucket_policy,
