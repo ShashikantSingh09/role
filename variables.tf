@@ -6,7 +6,7 @@ variable "gd_finding_publishing_frequency" {
 variable "gd_finding_bucket_name" {
   description = "S3 bucket name for GuardDuty findings"
   type        = string
-  default     = ""
+  default     = "782439390712-googlesecops-aws-guardduty-logs"
 }
 
 variable "kms_alias" {

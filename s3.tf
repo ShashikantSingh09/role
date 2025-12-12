@@ -1,14 +1,6 @@
 resource "aws_s3_bucket" "gd_bucket" {
   bucket = var.gd_finding_bucket_name
-}
-
-resource "aws_s3_bucket_public_access_block" "gd_bucket_access_block" {
-  bucket = aws_s3_bucket.gd_bucket.id
-
-  block_public_acls       = false
-  block_public_policy     = false
-  ignore_public_acls      = false
-  restrict_public_buckets = false
+  provider = aws.us_east_2
 }
 
 data "aws_iam_policy_document" "s3_bucket_policy" {
@@ -89,6 +81,7 @@ data "aws_iam_policy_document" "s3_bucket_policy" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values = [
+        "782439390712",
         "516172020428",
         "178146987985",
         "974502855972",
@@ -110,6 +103,7 @@ data "aws_iam_policy_document" "s3_bucket_policy" {
       test     = "StringLike"
       variable = "aws:SourceArn"
       values = [
+        "arn:aws:guardduty:*:782439390712:detector/*",
         "arn:aws:guardduty:*:516172020428:detector/*",
         "arn:aws:guardduty:*:178146987985:detector/*",
         "arn:aws:guardduty:*:974502855972:detector/*",
@@ -143,6 +137,7 @@ data "aws_iam_policy_document" "s3_bucket_policy" {
       test     = "StringEquals"
       variable = "aws:SourceAccount"
       values = [
+        "782439390712",
         "516172020428",
         "178146987985",
         "974502855972",
@@ -164,6 +159,7 @@ data "aws_iam_policy_document" "s3_bucket_policy" {
       test     = "StringLike"
       variable = "aws:SourceArn"
       values = [
+        "arn:aws:guardduty:*:782439390712:detector/*",
         "arn:aws:guardduty:*:516172020428:detector/*",
         "arn:aws:guardduty:*:178146987985:detector/*",
         "arn:aws:guardduty:*:974502855972:detector/*",
@@ -227,6 +223,7 @@ resource "aws_kms_key" "gd_key" {
   description             = "KMS key for GuardDuty findings"
   enable_key_rotation     = true
   deletion_window_in_days = 30
+  provider = aws.us_east_2
 }
 
 resource "aws_kms_alias" "alias" {
@@ -246,7 +243,7 @@ resource "aws_kms_key_policy" "gd_key_policy" {
         Sid    = "EnableIAMUserPermissions"
         Effect = "Allow"
         Principal = {
-          AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+          AWS = "arn:aws:iam::782439390712:root"
         }
         Action   = "kms:*"
         Resource = "*"
@@ -264,6 +261,7 @@ resource "aws_kms_key_policy" "gd_key_policy" {
         Condition = {
           StringEquals = {
             "aws:SourceAccount" = [
+              "782439390712",
               "516172020428",
               "178146987985",
               "974502855972",
@@ -282,6 +280,7 @@ resource "aws_kms_key_policy" "gd_key_policy" {
           },
           ArnLike = {
             "aws:SourceArn" = [
+              "arn:aws:guardduty:*:782439390712:detector/*",
               "arn:aws:guardduty:*:516172020428:detector/*",
               "arn:aws:guardduty:*:178146987985:detector/*",
               "arn:aws:guardduty:*:974502855972:detector/*",
@@ -305,11 +304,14 @@ resource "aws_kms_key_policy" "gd_key_policy" {
 }
 
 data "aws_guardduty_detector" "regional" {
-  provider = aws.us_east_1
+  provider = aws.us_east_2
 }
 
 resource "aws_guardduty_publishing_destination" "export" {
   detector_id      = data.aws_guardduty_detector.current.id
   destination_arn  = aws_s3_bucket.gd_bucket.arn
   kms_key_arn      = aws_kms_key.gd_key.arn
+  depends_on = [
+    aws_s3_bucket_policy.gd_bucket_policy,
+  ]
 }
