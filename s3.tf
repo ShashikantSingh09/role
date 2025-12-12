@@ -180,8 +180,9 @@ data "aws_iam_policy_document" "s3_bucket_policy" {
 }
 
 resource "aws_s3_bucket_policy" "gd_bucket_policy" {
-  bucket = aws_s3_bucket.gd_bucket.id
-  policy = data.aws_iam_policy_document.s3_bucket_policy.json
+  bucket   = aws_s3_bucket.gd_bucket.id
+  provider = aws.us_east_2
+  policy   = data.aws_iam_policy_document.s3_bucket_policy.json
 }
 
 resource "aws_s3_bucket_ownership_controls" "ownership" {
@@ -193,14 +194,14 @@ resource "aws_s3_bucket_ownership_controls" "ownership" {
 
 resource "aws_s3_bucket_acl" "acl" {
   depends_on = [aws_s3_bucket_ownership_controls.ownership]
-
-  bucket = aws_s3_bucket.gd_bucket.id
-  acl    = "private"
+  provider   = aws.us_east_2
+  bucket     = aws_s3_bucket.gd_bucket.id
+  acl        = "private"
 }
 
 resource "aws_s3_bucket_public_access_block" "block" {
-  bucket = aws_s3_bucket.gd_bucket.id
-
+  bucket                  = aws_s3_bucket.gd_bucket.id
+  provider                = aws.us_east_2
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -208,8 +209,8 @@ resource "aws_s3_bucket_public_access_block" "block" {
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "gd_encryption" {
-  bucket = aws_s3_bucket.gd_bucket.id
-
+  bucket   = aws_s3_bucket.gd_bucket.id
+  provider = aws.us_east_2
   rule {
     apply_server_side_encryption_by_default {
       kms_master_key_id = aws_kms_key.gd_key.arn
