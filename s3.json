@@ -1,0 +1,145 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "Deny non-HTTPS access",
+            "Effect": "Deny",
+            "Principal": {
+                "Service": "guardduty.amazonaws.com"
+            },
+            "Action": "s3:*",
+            "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+            "Condition": {
+                "Bool": {
+                    "aws:SecureTransport": "false"
+                }
+            }
+        },
+        {
+            "Sid": "Deny incorrect encryption header",
+            "Effect": "Deny",
+            "Principal": {
+                "Service": "guardduty.amazonaws.com"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+            "Condition": {
+                "StringNotEquals": {
+                    "s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:us-east-2:782439390712:key/9f60c43e-ab49-48d2-ab6c-55808540043a"
+                }
+            }
+        },
+        {
+            "Sid": "Deny unencrypted object uploads",
+            "Effect": "Deny",
+            "Principal": {
+                "Service": "guardduty.amazonaws.com"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+            "Condition": {
+                "StringNotEquals": {
+                    "s3:x-amz-server-side-encryption": "aws:kms"
+                }
+            }
+        },
+        {
+            "Sid": "Allow PutObject",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "guardduty.amazonaws.com"
+            },
+            "Action": "s3:PutObject",
+            "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+            "Condition": {
+                "StringEquals": {
+                    "aws:SourceAccount": [
+                        "782439390712",
+                        "516172020428",
+                        "178146987985",
+                        "974502855972",
+                        "523447765480",
+                        "544676427182",
+                        "460252569361",
+                        "260990552251",
+                        "519537597559",
+                        "659566604954",
+                        "818809930947",
+                        "866810612377",
+                        "071093231757",
+                        "512138226175",
+                        "001634221322"
+                    ]
+                },
+                "ArnEquals": {
+                    "aws:SourceArn": [
+                        "arn:aws:guardduty:us-east-2:782439390712:detector/*",
+                        "arn:aws:guardduty:us-east-1:516172020428:detector/*",
+                        "arn:aws:guardduty:us-east-1:178146987985:detector/*",
+                        "arn:aws:guardduty:us-east-1:974502855972:detector/*",
+                        "arn:aws:guardduty:us-east-1:523447765480:detector/*",
+                        "arn:aws:guardduty:us-east-1:544676427182:detector/*",
+                        "arn:aws:guardduty:us-east-1:460252569361:detector/*",
+                        "arn:aws:guardduty:us-east-1:260990552251:detector/*",
+                        "arn:aws:guardduty:us-east-1:519537597559:detector/*",
+                        "arn:aws:guardduty:us-east-1:659566604954:detector/*",
+                        "arn:aws:guardduty:us-east-1:818809930947:detector/*",
+                        "arn:aws:guardduty:us-east-1:866810612377:detector/*",
+                        "arn:aws:guardduty:us-east-1:071093231757:detector/*",
+                        "arn:aws:guardduty:us-east-1:512138226175:detector/*",
+                        "arn:aws:guardduty:us-east-1:001634221322:detector/*"
+                    ]
+                }
+            }
+        },
+        {
+            "Sid": "Allow GetBucketLocation",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "guardduty.amazonaws.com"
+            },
+            "Action": "s3:GetBucketLocation",
+            "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs",
+            "Condition": {
+                "StringEquals": {
+                    "aws:SourceAccount": [
+                        "782439390712",
+                        "516172020428",
+                        "178146987985",
+                        "974502855972",
+                        "523447765480",
+                        "544676427182",
+                        "460252569361",
+                        "260990552251",
+                        "519537597559",
+                        "659566604954",
+                        "818809930947",
+                        "866810612377",
+                        "071093231757",
+                        "512138226175",
+                        "001634221322"
+                    ]
+                },
+                "ArnEquals": {
+                    "aws:SourceArn": [
+                        "arn:aws:guardduty:us-east-2:782439390712:detector/*",
+                        "arn:aws:guardduty:us-east-1:516172020428:detector/*",
+                        "arn:aws:guardduty:us-east-1:178146987985:detector/*",
+                        "arn:aws:guardduty:us-east-1:974502855972:detector/*",
+                        "arn:aws:guardduty:us-east-1:523447765480:detector/*",
+                        "arn:aws:guardduty:us-east-1:544676427182:detector/*",
+                        "arn:aws:guardduty:us-east-1:460252569361:detector/*",
+                        "arn:aws:guardduty:us-east-1:260990552251:detector/*",
+                        "arn:aws:guardduty:us-east-1:519537597559:detector/*",
+                        "arn:aws:guardduty:us-east-1:659566604954:detector/*",
+                        "arn:aws:guardduty:us-east-1:818809930947:detector/*",
+                        "arn:aws:guardduty:us-east-1:866810612377:detector/*",
+                        "arn:aws:guardduty:us-east-1:071093231757:detector/*",
+                        "arn:aws:guardduty:us-east-1:512138226175:detector/*",
+                        "arn:aws:guardduty:us-east-1:001634221322:detector/*"
+                    ]
+                }
+            }
+        }
+    ]
+}
