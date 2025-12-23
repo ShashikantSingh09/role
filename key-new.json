@@ -1,9 +1,9 @@
 {
   "Version": "2012-10-17",
-  "Id": "guardduty-key-policy",
+  "Id": "key-consolepolicy-3",
   "Statement": [
     {
-      "Sid": "EnableRootPermissions",
+      "Sid": "Enable IAM User Permissions",
       "Effect": "Allow",
       "Principal": {
         "AWS": "arn:aws:iam::782439390712:root"
@@ -12,10 +12,13 @@
       "Resource": "*"
     },
     {
-      "Sid": "AllowGuardDutyEncryptFindings",
+      "Sid": "AllowGuardDutyToEncryptFindings",
       "Effect": "Allow",
       "Principal": {
-        "Service": "guardduty.amazonaws.com"
+        "Service": [
+          "guardduty.me-south-1.amazonaws.com",
+          "guardduty.amazonaws.com"
+        ]
       },
       "Action": [
         "kms:GenerateDataKey",
@@ -40,6 +43,25 @@
             "071093231757",
             "512138226175",
             "001634221322"
+          ]
+        },
+        "ArnEquals": {
+          "aws:SourceArn": [
+            "arn:aws:guardduty:*:782439390712:detector/*",
+            "arn:aws:guardduty:*:516172020428:detector/*",
+            "arn:aws:guardduty:*:178146987985:detector/*",
+            "arn:aws:guardduty:*:974502855972:detector/*",
+            "arn:aws:guardduty:*:523447765480:detector/*",
+            "arn:aws:guardduty:*:544676427182:detector/*",
+            "arn:aws:guardduty:*:460252569361:detector/*",
+            "arn:aws:guardduty:*:026090552251:detector/*",
+            "arn:aws:guardduty:*:519537597559:detector/*",
+            "arn:aws:guardduty:*:659566604954:detector/*",
+            "arn:aws:guardduty:*:818809930947:detector/*",
+            "arn:aws:guardduty:*:866810612377:detector/*",
+            "arn:aws:guardduty:*:071093231757:detector/*",
+            "arn:aws:guardduty:*:512138226175:detector/*",
+            "arn:aws:guardduty:*:001634221322:detector/*"
           ]
         }
       }
