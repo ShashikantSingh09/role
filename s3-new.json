@@ -1,0 +1,127 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyNonHTTPSAccess",
+      "Effect": "Deny",
+      "Principal": {
+        "Service": "guardduty.amazonaws.com"
+      },
+      "Action": "s3:*",
+      "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+      "Condition": {
+        "Bool": {
+          "aws:SecureTransport": "false"
+        }
+      }
+    },
+    {
+      "Sid": "DenyIncorrectEncryptionHeader",
+      "Effect": "Deny",
+      "Principal": {
+        "Service": "guardduty.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:me-south-1:782439390712:key/YOUR-KMS-KEY-ID"
+        }
+      }
+    },
+    {
+      "Sid": "DenyUnencryptedObjectUploads",
+      "Effect": "Deny",
+      "Principal": {
+        "Service": "guardduty.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+      "Condition": {
+        "StringNotEquals": {
+          "s3:x-amz-server-side-encryption": "aws:kms"
+        }
+      }
+    },
+    {
+      "Sid": "AllowGuardDutyPutObject",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "guardduty.amazonaws.com"
+      },
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": [
+            "782439390712",
+            "516172020428",
+            "178146987985",
+            "974502855972",
+            "523447765480",
+            "544676427182",
+            "460252569361",
+            "026090552251",
+            "519537597559",
+            "659566604954",
+            "818809930947",
+            "866810612377",
+            "071093231757",
+            "512138226175",
+            "001634221322"
+          ],
+          "s3:x-amz-server-side-encryption": "aws:kms"
+        },
+        "ArnEquals": {
+          "aws:SourceArn": [
+            "arn:aws:guardduty:*:782439390712:detector/*",
+            "arn:aws:guardduty:*:516172020428:detector/*",
+            "arn:aws:guardduty:*:178146987985:detector/*",
+            "arn:aws:guardduty:*:974502855972:detector/*",
+            "arn:aws:guardduty:*:523447765480:detector/*",
+            "arn:aws:guardduty:*:544676427182:detector/*",
+            "arn:aws:guardduty:*:460252569361:detector/*",
+            "arn:aws:guardduty:*:026090552251:detector/*",
+            "arn:aws:guardduty:*:519537597559:detector/*",
+            "arn:aws:guardduty:*:659566604954:detector/*",
+            "arn:aws:guardduty:*:818809930947:detector/*",
+            "arn:aws:guardduty:*:866810612377:detector/*",
+            "arn:aws:guardduty:*:071093231757:detector/*",
+            "arn:aws:guardduty:*:512138226175:detector/*",
+            "arn:aws:guardduty:*:001634221322:detector/*"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "AllowGetBucketLocation",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "guardduty.amazonaws.com"
+      },
+      "Action": "s3:GetBucketLocation",
+      "Resource": "arn:aws:s3:::782439390712-googlesecops-aws-guardduty-logs",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": [
+            "782439390712",
+            "516172020428",
+            "178146987985",
+            "974502855972",
+            "523447765480",
+            "544676427182",
+            "460252569361",
+            "026090552251",
+            "519537597559",
+            "659566604954",
+            "818809930947",
+            "866810612377",
+            "071093231757",
+            "512138226175",
+            "001634221322"
+          ]
+        }
+      }
+    }
+  ]
+}
