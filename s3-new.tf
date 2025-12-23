@@ -1,15 +1,7 @@
-############################################
-# S3 BUCKET FOR GUARDDUTY FINDINGS
-############################################
-
 resource "aws_s3_bucket" "gd_bucket" {
   bucket   = var.gd_finding_bucket_name
   provider = aws.us_east_2
 }
-
-############################################
-# S3 BUCKET POLICY
-############################################
 
 data "aws_iam_policy_document" "s3_bucket_policy" {
 
@@ -191,10 +183,6 @@ resource "aws_s3_bucket_policy" "gd_bucket_policy" {
   policy   = data.aws_iam_policy_document.s3_bucket_policy.json
 }
 
-############################################
-# S3 SECURITY SETTINGS
-############################################
-
 resource "aws_s3_bucket_ownership_controls" "ownership" {
   bucket   = aws_s3_bucket.gd_bucket.id
   provider = aws.us_east_2
@@ -320,9 +308,7 @@ resource "aws_kms_key_policy" "gd_key_policy" {
   })
 }
 
-
 # GUARDDUTY DETECTOR DATA SOURCES (All Regions)
-
 
 data "aws_guardduty_detector" "us_east_1" {
   count    = contains(var.aws_regions, "us-east-1") ? 1 : 0
