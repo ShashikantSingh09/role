@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Id": "guardduty-key-policy",
+  "Statement": [
+    {
+      "Sid": "EnableRootPermissions",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::782439390712:root"
+      },
+      "Action": "kms:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowGuardDutyEncryptFindings",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "guardduty.amazonaws.com"
+      },
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Encrypt"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:SourceAccount": [
+            "782439390712",
+            "516172020428",
+            "178146987985",
+            "974502855972",
+            "523447765480",
+            "544676427182",
+            "460252569361",
+            "026090552251",
+            "519537597559",
+            "659566604954",
+            "818809930947",
+            "866810612377",
+            "071093231757",
+            "512138226175",
+            "001634221322"
+          ]
+        }
+      }
+    }
+  ]
+}
