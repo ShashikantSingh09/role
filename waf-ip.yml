@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: >
   CloudWatch Logs processor Lambda that forwards WAF IP management
-  logs to Google SecOps (Chronicle)
+  logs directly to Google SecOps (Chronicle) via webhook.
 
 Resources:
 
@@ -11,14 +11,11 @@ Resources:
   ############################################
   LogsProcessorFunction:
     Type: AWS::Serverless::Function
-    DependsOn: WafIpManageSecopsCreds
     Properties:
       FunctionName: waf-ip-manage-secops-cloudwatch-logs-processor
       Runtime: python3.11
       Handler: index.lambda_handler
       Timeout: 30
-
-      # Lambda code is in the SAME directory as this template
       CodeUri: .
 
       Environment:
@@ -39,7 +36,7 @@ Resources:
       SourceArn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*:*
 
   ############################################
-  # Subscription Filters
+  # CloudWatch Logs Subscription Filters
   ############################################
   BlocklistIpFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
@@ -80,8 +77,3 @@ Resources:
         - FunctionName: !ImportValue IPExpireFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
-
-Outputs:
-  SecretName:
-    Description: Name of the Secrets Manager secret used for Google SecOps
-    Value: !Ref WafIpManageSecopsCreds
