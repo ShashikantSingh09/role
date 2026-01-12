@@ -1,33 +1,49 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Function used by CloudWatch subscription filter to send logs to Google SecOps (Chronicle)
+Description: >
+  CloudWatch Logs processor Lambda that forwards WAF IP management
+  logs to Google SecOps (Chronicle)
 
 Resources:
 
+  ############################################
+  # Logs Processor Lambda
+  ############################################
   LogsProcessorFunction:
     Type: AWS::Serverless::Function
     DependsOn: WafIpManageSecopsCreds
     Properties:
-      Handler: index.lambda_handler
-      Runtime: python3.11
-      Timeout: 30
       FunctionName: waf-ip-manage-secops-cloudwatch-logs-processor
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 30
+
+      # Lambda code is in the SAME directory as this template
+      CodeUri: .
+
       Environment:
         Variables:
           GOOGLE_SECOPS_WEBHOOK_URL: https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs
           GOOGLE_SECOPS_API_KEY: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:api_key}}'
           GOOGLE_SECOPS_FEED_SECRET: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:feed_secret}}'
 
+  ############################################
+  # Allow CloudWatch Logs to invoke Lambda
+  ############################################
   LogsProcessorPermission:
     Type: AWS::Lambda::Permission
     Properties:
       FunctionName: !GetAtt LogsProcessorFunction.Arn
       Action: lambda:InvokeFunction
-      Principal: !Sub "logs.${AWS::Region}.amazonaws.com"
-      SourceArn: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*:*"
+      Principal: !Sub logs.${AWS::Region}.amazonaws.com
+      SourceArn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*:*
 
+  ############################################
+  # Subscription Filters
+  ############################################
   BlocklistIpFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
+    DependsOn: LogsProcessorPermission
     Properties:
       LogGroupName: !Sub
         - "/aws/lambda/${FunctionName}"
@@ -37,6 +53,7 @@ Resources:
 
   SafelistIpFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
+    DependsOn: LogsProcessorPermission
     Properties:
       LogGroupName: !Sub
         - "/aws/lambda/${FunctionName}"
@@ -46,6 +63,7 @@ Resources:
 
   IPPropagateFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
+    DependsOn: LogsProcessorPermission
     Properties:
       LogGroupName: !Sub
         - "/aws/lambda/${FunctionName}"
@@ -55,6 +73,7 @@ Resources:
 
   IPExpireFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
+    DependsOn: LogsProcessorPermission
     Properties:
       LogGroupName: !Sub
         - "/aws/lambda/${FunctionName}"
@@ -64,5 +83,5 @@ Resources:
 
 Outputs:
   SecretName:
-    Description: The name of the secret created
+    Description: Name of the Secrets Manager secret used for Google SecOps
     Value: !Ref WafIpManageSecopsCreds
