@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  CloudWatch Logs processor Lambda that forwards logs
+  from /aws/lambda/jamf-now-to-splunk
+  directly to Google SecOps (Chronicle) via webhook.
+
+Resources:
+
+  LogsProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: waf-ip-manage-secops-cloudwatch-logs-processor
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      Timeout: 30
+      CodeUri: .
+
+      Environment:
+        Variables:
+          GOOGLE_SECOPS_WEBHOOK_URL: https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs
+          GOOGLE_SECOPS_API_KEY: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:api_key}}'
+          GOOGLE_SECOPS_FEED_SECRET: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:feed_secret}}'
+
+  LogsProcessorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt LogsProcessorFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: !Sub logs.${AWS::Region}.amazonaws.com
+      SourceArn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/jamf-now-to-splunk:*
+
+  JamfNowToSplunkSubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    DependsOn: LogsProcessorPermission
+    Properties:
+      LogGroupName: /aws/lambda/jamf-now-to-splunk
+      FilterPattern: ""
+      DestinationArn: !GetAtt LogsProcessorFunction.Arn
