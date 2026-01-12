@@ -6,72 +6,92 @@ import urllib.parse
 import os
 import logging
 
-# Configure logging
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
     """
-    Decodes CloudWatch logs and forwards them to Google SecOps (Chronicle)
-    using credentials from environment variables.
+    Decodes CloudWatch Logs subscription events and forwards them
+    to Google SecOps (Chronicle). Safely ignores non-logs invocations.
     """
+
+    if 'awslogs' not in event or 'data' not in event.get('awslogs', {}):
+        logger.info("Invocation is not from CloudWatch Logs. Ignoring event.")
+        return {
+            "statusCode": 200,
+            "body": "Not a CloudWatch Logs event"
+        }
+
     base_url = os.environ.get('GOOGLE_SECOPS_WEBHOOK_URL')
     api_key = os.environ.get('GOOGLE_SECOPS_API_KEY')
     feed_secret = os.environ.get('GOOGLE_SECOPS_FEED_SECRET')
 
     if not base_url or not api_key or not feed_secret:
-        logger.error("Missing required environment variables (URL, API Key, or Secret).")
-        return
+        logger.error("Missing required environment variables.")
+        return {
+            "statusCode": 500,
+            "body": "Missing environment variables"
+        }
 
-    # Construct the authenticated URL
-    # Google SecOps Webhooks typically use query params: ?key=API_KEY&secret=SECRET
-    params = urllib.parse.urlencode({'key': api_key, 'secret': feed_secret})
+    # Chronicle webhook uses query parameters
+    params = urllib.parse.urlencode({
+        'key': api_key,
+        'secret': feed_secret
+    })
     authenticated_url = f"{base_url}?{params}"
 
     try:
-        # 1. Decode and decompress CloudWatch logs
-        cw_data = event['awslogs']['data']
-        compressed_payload = base64.b64decode(cw_data)
-        uncompressed_payload = gzip.decompress(compressed_payload)
-        payload = json.loads(uncompressed_payload)
-        
-        log_events = payload.get('logEvents', [])
-        
-        # 2. Prepare the batch
-        batch_entries = []
-        for log in log_events:
-            entry = {
-                "timestamp": log['timestamp'],
-                "message": log['message'],
-                "logGroup": payload.get('logGroup'),
-                "logStream": payload.get('logStream'),
-                "function_arn": context.invoked_function_arn,
-                "aws_request_id": context.aws_request_id
-            }
-            batch_entries.append(entry)
+        compressed_data = base64.b64decode(event['awslogs']['data'])
+        decompressed_data = gzip.decompress(compressed_data)
+        logs_payload = json.loads(decompressed_data)
 
-        if not batch_entries:
-            return {'statusCode': 200, 'body': 'No log events found.'}
-
-        # 3. Send to Google SecOps
-        data = json.dumps(batch_entries).encode('utf-8')
-        
-        req = urllib.request.Request(
-            authenticated_url, 
-            data=data, 
-            headers={
-                'Content-Type': 'application/json',
-                'User-Agent': 'AWS-Lambda-CloudWatch-Forwarder'
-            }
-        )
-        
-        with urllib.request.urlopen(req) as response:
-            logger.info(f"Successfully sent {len(batch_entries)} logs. Response: {response.status}")
+        log_events = logs_payload.get('logEvents', [])
+        if not log_events:
+            logger.info("No log events found in payload.")
             return {
-                'statusCode': response.status,
-                'body': f"Forwarded {len(batch_entries)} logs."
+                "statusCode": 200,
+                "body": "No log events"
             }
 
-    except Exception as e:
-        logger.error(f"Error processing logs: {str(e)}")
-        raise e
+        # 2️⃣ Build Chronicle-compatible batch
+        batch = []
+        for log in log_events:
+            batch.append({
+                "timestamp": log.get("timestamp"),
+                "message": log.get("message"),
+                "logGroup": logs_payload.get("logGroup"),
+                "logStream": logs_payload.get("logStream"),
+                "awsRegion": os.environ.get("AWS_REGION"),
+                "functionArn": context.invoked_function_arn,
+                "requestId": context.aws_request_id
+            })
+
+        payload_bytes = json.dumps(batch).encode("utf-8")
+
+        request = urllib.request.Request(
+            authenticated_url,
+            data=payload_bytes,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "aws-cloudwatch-log-forwarder"
+            },
+            method="POST"
+        )
+
+        with urllib.request.urlopen(request, timeout=10) as response:
+            logger.info(
+                "Forwarded %d log events. Chronicle response: %s",
+                len(batch),
+                response.status
+            )
+            return {
+                "statusCode": response.status,
+                "body": f"Forwarded {len(batch)} log events"
+            }
+
+    except Exception as exc:
+        logger.exception("Failed to process CloudWatch Logs event")
+        return {
+            "statusCode": 500,
+            "body": str(exc)
+        }
