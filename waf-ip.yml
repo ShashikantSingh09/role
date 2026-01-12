@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Function used by CloudWatch subscription filter to send logs to Google SecOps (Chronicle)
-      
+
+Resources:
+
   LogsProcessorFunction:
     Type: AWS::Serverless::Function
     DependsOn: WafIpManageSecopsCreds
@@ -12,7 +14,7 @@ Description: Function used by CloudWatch subscription filter to send logs to Goo
       FunctionName: waf-ip-manage-secops-cloudwatch-logs-processor
       Environment:
         Variables:
-          GOOGLE_SECOPS_WEBHOOK_URL: "https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs"
+          GOOGLE_SECOPS_WEBHOOK_URL: https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs
           GOOGLE_SECOPS_API_KEY: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:api_key}}'
           GOOGLE_SECOPS_FEED_SECRET: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:feed_secret}}'
 
@@ -27,32 +29,40 @@ Description: Function used by CloudWatch subscription filter to send logs to Goo
   BlocklistIpFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
     Properties:
-      LogGroupName: !Sub ["/aws/lambda/${FunctionName}", FunctionName: !ImportValue BlocklistIpFunctionName]
+      LogGroupName: !Sub
+        - "/aws/lambda/${FunctionName}"
+        - FunctionName: !ImportValue BlocklistIpFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
 
   SafelistIpFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
     Properties:
-      LogGroupName: !Sub ["/aws/lambda/${FunctionName}", FunctionName: !ImportValue SafelistIpFunctionName]
+      LogGroupName: !Sub
+        - "/aws/lambda/${FunctionName}"
+        - FunctionName: !ImportValue SafelistIpFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
 
   IPPropagateFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
     Properties:
-      LogGroupName: !Sub ["/aws/lambda/${FunctionName}", FunctionName: !ImportValue IPPropagateFunctionName]
+      LogGroupName: !Sub
+        - "/aws/lambda/${FunctionName}"
+        - FunctionName: !ImportValue IPPropagateFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
 
   IPExpireFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
     Properties:
-      LogGroupName: !Sub ["/aws/lambda/${FunctionName}", FunctionName: !ImportValue IPExpireFunctionName]
+      LogGroupName: !Sub
+        - "/aws/lambda/${FunctionName}"
+        - FunctionName: !ImportValue IPExpireFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
 
 Outputs:
   SecretName:
-    Description: "The name of the secret created"
+    Description: The name of the secret created
     Value: !Ref WafIpManageSecopsCreds
