@@ -10,24 +10,28 @@ from datetime import datetime, timezone
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-SECOPS_TIMEOUT = 10
+TIMEOUT = 10
 
 def lambda_handler(event, context):
     """
     CloudWatch Logs → Google SecOps (Chronicle)
-    Feed type: HTTPS_PUSH_WEBHOOK
+    Feed: HTTPS_PUSH_WEBHOOK
     Source: AWS_CLOUDWATCH
+    Parser-compatible (raw logText)
     """
-    if not isinstance(event, dict) or 'awslogs' not in event or 'data' not in event.get('awslogs', {}):
-        logger.info("Not a CloudWatch Logs subscription event. Ignored.")
-        return {"statusCode": 200, "body": "Ignored non-CloudWatch event"}
 
+    # ---------- HARD GUARD ----------
+    if not isinstance(event, dict) or "awslogs" not in event or "data" not in event.get("awslogs", {}):
+        logger.info("Non-CloudWatch invocation ignored")
+        return {"statusCode": 200, "body": "Ignored"}
+
+    # ---------- ENV VARS ----------
     base_url = os.environ.get("GOOGLE_SECOPS_WEBHOOK_URL")
     api_key = os.environ.get("GOOGLE_SECOPS_API_KEY")
     feed_secret = os.environ.get("GOOGLE_SECOPS_FEED_SECRET")
 
     if not base_url or not api_key or not feed_secret:
-        logger.error("Missing Google SecOps environment variables")
+        logger.error("Missing SecOps environment variables")
         return {"statusCode": 500, "body": "Missing env vars"}
 
     params = urllib.parse.urlencode({
@@ -43,28 +47,22 @@ def lambda_handler(event, context):
 
         log_events = payload.get("logEvents", [])
         if not log_events:
-            logger.info("No logEvents found")
-            return {"statusCode": 200, "body": "No log events"}
+            logger.info("No log events found")
+            return {"statusCode": 200, "body": "No logs"}
 
         sent = 0
         failed = 0
 
         for log in log_events:
-            event_time = datetime.fromtimestamp(
+
+            timestamp = datetime.fromtimestamp(
                 log["timestamp"] / 1000,
                 tz=timezone.utc
             ).isoformat()
 
             secops_event = {
-                "eventTime": event_time,
-                "message": log.get("message"),
-                "logGroup": payload.get("logGroup"),
-                "logStream": payload.get("logStream"),
-                "source": "aws-cloudwatch",
-                "severity": "INFO",
-                "awsRegion": os.environ.get("AWS_REGION"),
-                "functionArn": context.invoked_function_arn,
-                "requestId": context.aws_request_id
+                "logText": log.get("message"),
+                "timestamp": timestamp
             }
 
             data = json.dumps(secops_event).encode("utf-8")
@@ -80,18 +78,19 @@ def lambda_handler(event, context):
             )
 
             try:
-                with urllib.request.urlopen(request, timeout=SECOPS_TIMEOUT) as response:
-                    logger.info("Sent log to SecOps, HTTP %s", response.status)
+                with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+                    logger.info("Sent log to SecOps (HTTP %s)", response.status)
                     sent += 1
             except Exception as send_err:
                 logger.error(
-                    "FAILED sending log to SecOps: %s | Payload: %s",
+                    "FAILED sending log: %s | logText=%s",
                     send_err,
-                    json.dumps(secops_event)
+                    log.get("message")
                 )
                 failed += 1
 
-        logger.info("SecOps delivery complete | sent=%d failed=%d", sent, failed)
+        logger.info("SecOps delivery summary | sent=%d failed=%d", sent, failed)
+
         return {
             "statusCode": 200 if failed == 0 else 207,
             "body": f"Sent={sent}, Failed={failed}"
