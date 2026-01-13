@@ -1,0 +1,30 @@
+curl -v -X POST "YOUR_WEBHOOK_URL?key=YOUR_API_KEY&secret=YOUR_SECRET" \
+-H "Content-Type: application/json" \
+-d '{
+  "timestamp": 1705000000000,
+  "formatVersion": 1,
+  "webaclId": "arn:aws:wafv2:us-east-1:123456789012:regional/webacl/TEST-WAF-ACL/123",
+  "terminatingRuleId": "AWS-AWSManagedRulesCommonRuleSet",
+  "terminatingRuleType": "REGULAR",
+  "action": "BLOCK",
+  "terminatingRuleMatchDetails": [],
+  "httpRequest": {
+    "clientIp": "198.51.100.22",
+    "country": "US",
+    "headers": [
+      {
+        "name": "Host",
+        "value": "www.example.com"
+      },
+      {
+        "name": "User-Agent",
+        "value": "Mozilla/5.0 (MaliciousBot/1.0)"
+      }
+    ],
+    "uri": "/admin-login",
+    "args": "user=admin",
+    "httpVersion": "HTTP/1.1",
+    "httpMethod": "GET",
+    "requestId": "1-2-3-4-5"
+  }
+}'
