@@ -1,4 +1,4 @@
-curl -v -X POST "YOUR_WEBHOOK_URL?key=YOUR_API_KEY&secret=YOUR_SECRET" \
+curl -v -X POST "https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs?key=AIzaSyAUigYzLBuGmZxFBxjU9-3WdVvMsSCiYgQ&&secret=611fb5528f14356b28bc424e76f84c46756c7d179efbd1b45df89acc01cac53a" \
 -H "Content-Type: application/json" \
 -d '{
   "timestamp": 1705000000000,
