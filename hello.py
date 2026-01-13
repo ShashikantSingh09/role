@@ -1,11 +1,11 @@
 import json
 import gzip
 import base64
-import urllib.request
-import urllib.parse
 import os
 import logging
 from datetime import datetime, timezone
+from http.client import HTTPSConnection
+from urllib.parse import urlparse, urlencode
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -18,19 +18,17 @@ def lambda_handler(event, context):
     if "awslogs" not in event or "data" not in event["awslogs"]:
         return {"statusCode": 200, "body": "Ignored"}
 
-    base_url = os.environ.get("GOOGLE_SECOPS_WEBHOOK_URL")
-    api_key = os.environ.get("GOOGLE_SECOPS_API_KEY")
-    feed_secret = os.environ.get("GOOGLE_SECOPS_FEED_SECRET")
+    base_url = os.environ["GOOGLE_SECOPS_WEBHOOK_URL"]
+    api_key = os.environ["GOOGLE_SECOPS_API_KEY"]
+    feed_secret = os.environ["GOOGLE_SECOPS_FEED_SECRET"]
 
-    if not all([base_url, api_key, feed_secret]):
-        logger.error("Missing env vars")
-        return {"statusCode": 500}
-
-    secops_url = f"{base_url}?{urllib.parse.urlencode({'key': api_key, 'secret': feed_secret})}"
+    parsed = urlparse(base_url)
+    path = f"{parsed.path}?{urlencode({'key': api_key, 'secret': feed_secret})}"
 
     try:
-        compressed = base64.b64decode(event["awslogs"]["data"])
-        payload = json.loads(gzip.decompress(compressed))
+        payload = json.loads(
+            gzip.decompress(base64.b64decode(event["awslogs"]["data"]))
+        )
 
         events = []
         for log in payload.get("logEvents", []):
@@ -38,7 +36,7 @@ def lambda_handler(event, context):
                 continue
 
             events.append({
-                "message": log["message"],  # Unicode allowed
+                "message": log["message"],  # Unicode SAFE
                 "timestamp": datetime.fromtimestamp(
                     log["timestamp"] / 1000, tz=timezone.utc
                 ).isoformat(),
@@ -55,20 +53,23 @@ def lambda_handler(event, context):
             ensure_ascii=False
         ).encode("utf-8")
 
-        request = urllib.request.Request(
-            secops_url,
-            data=body,
+        conn = HTTPSConnection(parsed.hostname, timeout=SECOPS_TIMEOUT)
+        conn.request(
+            "POST",
+            path,
+            body=body,
             headers={
                 "Content-Type": "application/json; charset=utf-8",
                 "User-Agent": "aws-cloudwatch-secops-forwarder"
-            },
-            method="POST"
+            }
         )
 
-        urllib.request.urlopen(request, timeout=SECOPS_TIMEOUT)
+        response = conn.getresponse()
+        response.read()
+        conn.close()
 
         logger.info("Sent %d events to SecOps", len(events))
-        return {"statusCode": 200, "body": f"Sent {len(events)}"}
+        return {"statusCode": response.status}
 
     except Exception:
         logger.exception("Fatal error sending logs to SecOps")
