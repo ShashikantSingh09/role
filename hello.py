@@ -19,13 +19,10 @@ def lambda_handler(event, context):
     Source: AWS_CLOUDWATCH
     Parser-compatible (raw logText)
     """
-
-    # ---------- HARD GUARD ----------
     if not isinstance(event, dict) or "awslogs" not in event or "data" not in event.get("awslogs", {}):
         logger.info("Non-CloudWatch invocation ignored")
         return {"statusCode": 200, "body": "Ignored"}
 
-    # ---------- ENV VARS ----------
     base_url = os.environ.get("GOOGLE_SECOPS_WEBHOOK_URL")
     api_key = os.environ.get("GOOGLE_SECOPS_API_KEY")
     feed_secret = os.environ.get("GOOGLE_SECOPS_FEED_SECRET")
