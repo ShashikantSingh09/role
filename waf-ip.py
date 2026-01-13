@@ -11,14 +11,18 @@ logger.setLevel(logging.INFO)
 
 def lambda_handler(event, context):
     """
-    Decodes CloudWatch Logs subscription events and forwards them
-    to Google SecOps (Chronicle). Safely ignores non-logs invocations.
+    Decode CloudWatch Logs subscription events and forward
+    them to Google SecOps (Chronicle).
+    Safely ignores non-CloudWatch invocations.
     """
-    if 'awslogs' not in event or 'data' not in event.get('awslogs', {}):
-        logger.info("Invocation is not from CloudWatch Logs. Ignoring event.")
+
+    # 🔐 HARD GUARD — prevents KeyError
+    if not isinstance(event, dict) or 'awslogs' not in event or 'data' not in event.get('awslogs', {}):
+        logger.info("Not a CloudWatch Logs subscription event. Event ignored.")
+        logger.debug("Received event: %s", json.dumps(event))
         return {
             "statusCode": 200,
-            "body": "Not a CloudWatch Logs event"
+            "body": "Ignored non-CloudWatch Logs event"
         }
 
     base_url = os.environ.get('GOOGLE_SECOPS_WEBHOOK_URL')
@@ -26,32 +30,32 @@ def lambda_handler(event, context):
     feed_secret = os.environ.get('GOOGLE_SECOPS_FEED_SECRET')
 
     if not base_url or not api_key or not feed_secret:
-        logger.error("Missing required environment variables.")
+        logger.error("Missing required environment variables")
         return {
             "statusCode": 500,
             "body": "Missing environment variables"
         }
 
-    # Chronicle webhook uses query parameters
     params = urllib.parse.urlencode({
-        'key': api_key,
-        'secret': feed_secret
+        "key": api_key,
+        "secret": feed_secret
     })
     authenticated_url = f"{base_url}?{params}"
 
     try:
-        # 1️⃣ Decode CloudWatch Logs payload
+        # Decode CW Logs payload
         compressed_data = base64.b64decode(event['awslogs']['data'])
         decompressed_data = gzip.decompress(compressed_data)
         logs_payload = json.loads(decompressed_data)
 
-        log_events = logs_payload.get('logEvents', [])
+        log_events = logs_payload.get("logEvents", [])
         if not log_events:
-            logger.info("No log events found in payload.")
+            logger.info("No log events found")
             return {
                 "statusCode": 200,
                 "body": "No log events"
             }
+
         batch = []
         for log in log_events:
             batch.append({
@@ -77,18 +81,14 @@ def lambda_handler(event, context):
         )
 
         with urllib.request.urlopen(request, timeout=10) as response:
-            logger.info(
-                "Forwarded %d log events. Chronicle response: %s",
-                len(batch),
-                response.status
-            )
+            logger.info("Forwarded %d logs, Chronicle response: %s", len(batch), response.status)
             return {
                 "statusCode": response.status,
                 "body": f"Forwarded {len(batch)} log events"
             }
 
     except Exception as exc:
-        logger.exception("Failed to process CloudWatch Logs event")
+        logger.exception("Failed processing CloudWatch Logs event")
         return {
             "statusCode": 500,
             "body": str(exc)
