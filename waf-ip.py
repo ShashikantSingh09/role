@@ -5,91 +5,101 @@ import urllib.request
 import urllib.parse
 import os
 import logging
+from datetime import datetime, timezone
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+SECOPS_TIMEOUT = 10
+
 def lambda_handler(event, context):
     """
-    Decode CloudWatch Logs subscription events and forward
-    them to Google SecOps (Chronicle).
-    Safely ignores non-CloudWatch invocations.
+    CloudWatch Logs → Google SecOps (Chronicle)
+    
+    Fixes:
+    1. Uses "message" key (matches your working curl).
+    2. Batches logs into a single HTTP POST (prevents timeouts).
     """
 
-    # 🔐 HARD GUARD — prevents KeyError
-    if not isinstance(event, dict) or 'awslogs' not in event or 'data' not in event.get('awslogs', {}):
-        logger.info("Not a CloudWatch Logs subscription event. Event ignored.")
-        logger.debug("Received event: %s", json.dumps(event))
-        return {
-            "statusCode": 200,
-            "body": "Ignored non-CloudWatch Logs event"
-        }
+    if (
+        not isinstance(event, dict)
+        or "awslogs" not in event
+        or "data" not in event.get("awslogs", {})
+    ):
+        logger.info("Non-CloudWatch event received. Ignored.")
+        return {"statusCode": 200, "body": "Ignored"}
 
-    base_url = os.environ.get('GOOGLE_SECOPS_WEBHOOK_URL')
-    api_key = os.environ.get('GOOGLE_SECOPS_API_KEY')
-    feed_secret = os.environ.get('GOOGLE_SECOPS_FEED_SECRET')
+    base_url = os.environ.get("GOOGLE_SECOPS_WEBHOOK_URL")
+    api_key = os.environ.get("GOOGLE_SECOPS_API_KEY")
+    feed_secret = os.environ.get("GOOGLE_SECOPS_FEED_SECRET")
 
     if not base_url or not api_key or not feed_secret:
-        logger.error("Missing required environment variables")
-        return {
-            "statusCode": 500,
-            "body": "Missing environment variables"
-        }
+        logger.error("Missing Google SecOps environment variables")
+        return {"statusCode": 500, "body": "Missing env vars"}
 
     params = urllib.parse.urlencode({
         "key": api_key,
         "secret": feed_secret
     })
-    authenticated_url = f"{base_url}?{params}"
+    secops_url = f"{base_url}?{params}"
 
     try:
-        # Decode CW Logs payload
-        compressed_data = base64.b64decode(event['awslogs']['data'])
-        decompressed_data = gzip.decompress(compressed_data)
-        logs_payload = json.loads(decompressed_data)
+        compressed = base64.b64decode(event["awslogs"]["data"])
+        decompressed = gzip.decompress(compressed)
+        payload = json.loads(decompressed)
 
-        log_events = logs_payload.get("logEvents", [])
+        log_events = payload.get("logEvents", [])
         if not log_events:
             logger.info("No log events found")
-            return {
-                "statusCode": 200,
-                "body": "No log events"
-            }
+            return {"statusCode": 200, "body": "No logs"}
 
-        batch = []
+        batch_payload = []
+
         for log in log_events:
-            batch.append({
-                "timestamp": log.get("timestamp"),
-                "message": log.get("message"),
-                "logGroup": logs_payload.get("logGroup"),
-                "logStream": logs_payload.get("logStream"),
-                "awsRegion": os.environ.get("AWS_REGION"),
-                "functionArn": context.invoked_function_arn,
-                "requestId": context.aws_request_id
-            })
+            raw_message = log.get("message", "")
+            if not raw_message:
+                continue
 
-        payload_bytes = json.dumps(batch).encode("utf-8")
+            event_time = datetime.fromtimestamp(
+                log["timestamp"] / 1000,
+                tz=timezone.utc
+            ).isoformat()
+
+            secops_event = {
+                "message": raw_message,
+                "timestamp": event_time
+            }
+            
+            batch_payload.append(secops_event)
+
+        if not batch_payload:
+            return {"statusCode": 200, "body": "No valid logs to send"}
+
+        data = json.dumps(batch_payload).encode("utf-8")
 
         request = urllib.request.Request(
-            authenticated_url,
-            data=payload_bytes,
+            secops_url,
+            data=data,
             headers={
                 "Content-Type": "application/json",
-                "User-Agent": "aws-cloudwatch-log-forwarder"
+                "User-Agent": "aws-cloudwatch-secops-forwarder"
             },
             method="POST"
         )
 
-        with urllib.request.urlopen(request, timeout=10) as response:
-            logger.info("Forwarded %d logs, Chronicle response: %s", len(batch), response.status)
-            return {
-                "statusCode": response.status,
-                "body": f"Forwarded {len(batch)} log events"
-            }
+        urllib.request.urlopen(request, timeout=SECOPS_TIMEOUT)
+        
+        count = len(batch_payload)
+        logger.info(f"Successfully sent batch of {count} logs to SecOps.")
 
-    except Exception as exc:
-        logger.exception("Failed processing CloudWatch Logs event")
         return {
-            "statusCode": 500,
-            "body": str(exc)
+            "statusCode": 200,
+            "body": f"Sent batch of {count} logs"
         }
+
+    except urllib.error.HTTPError as e:
+        logger.error(f"HTTP Error {e.code}: {e.read().decode('utf-8')}")
+        return {"statusCode": e.code, "body": str(e)}
+    except Exception as exc:
+        logger.exception("Fatal error processing CloudWatch Logs")
+        return {"statusCode": 500, "body": str(exc)}
