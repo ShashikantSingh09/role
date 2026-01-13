@@ -5,7 +5,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from http.client import HTTPSConnection
-from urllib.parse import urlparse, urlencode
+from urllib.parse import urlparse, urlencode, quote
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -23,7 +23,15 @@ def lambda_handler(event, context):
     feed_secret = os.environ["GOOGLE_SECOPS_FEED_SECRET"]
 
     parsed = urlparse(base_url)
-    path = f"{parsed.path}?{urlencode({'key': api_key, 'secret': feed_secret})}"
+
+    # 🔧 FORCE ASCII-SAFE QUERY STRING
+    query = urlencode(
+        {"key": api_key, "secret": feed_secret},
+        safe=""
+    )
+
+    # 🔧 FORCE ASCII-SAFE PATH
+    path = quote(parsed.path or "/", safe="/") + "?" + query
 
     try:
         payload = json.loads(
@@ -36,7 +44,7 @@ def lambda_handler(event, context):
                 continue
 
             events.append({
-                "message": log["message"],  # Unicode SAFE
+                "message": log["message"],
                 "timestamp": datetime.fromtimestamp(
                     log["timestamp"] / 1000, tz=timezone.utc
                 ).isoformat(),
@@ -52,8 +60,9 @@ def lambda_handler(event, context):
             {"events": events},
             ensure_ascii=False
         ).encode("utf-8")
+        host = parsed.hostname.encode("idna").decode("ascii")
 
-        conn = HTTPSConnection(parsed.hostname, timeout=SECOPS_TIMEOUT)
+        conn = HTTPSConnection(host, timeout=SECOPS_TIMEOUT)
         conn.request(
             "POST",
             path,
@@ -64,12 +73,12 @@ def lambda_handler(event, context):
             }
         )
 
-        response = conn.getresponse()
-        response.read()
+        resp = conn.getresponse()
+        resp.read()
         conn.close()
 
         logger.info("Sent %d events to SecOps", len(events))
-        return {"statusCode": response.status}
+        return {"statusCode": resp.status}
 
     except Exception:
         logger.exception("Fatal error sending logs to SecOps")
