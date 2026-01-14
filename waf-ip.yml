@@ -6,9 +6,6 @@ Description: >
 
 Resources:
 
-  ############################################
-  # Logs Processor Lambda
-  ############################################
   LogsProcessorFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -24,9 +21,6 @@ Resources:
           GOOGLE_SECOPS_API_KEY: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:api_key}}'
           GOOGLE_SECOPS_FEED_SECRET: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:feed_secret}}'
 
-  ############################################
-  # Allow CloudWatch Logs to invoke Lambda
-  ############################################
   LogsProcessorPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -35,9 +29,6 @@ Resources:
       Principal: !Sub logs.${AWS::Region}.amazonaws.com
       SourceArn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*:*
 
-  ############################################
-  # CloudWatch Logs Subscription Filters
-  ############################################
   BlocklistIpFunctionSubscriptionFilter:
     Type: AWS::Logs::SubscriptionFilter
     DependsOn: LogsProcessorPermission
@@ -77,3 +68,4 @@ Resources:
         - FunctionName: !ImportValue IPExpireFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
+
