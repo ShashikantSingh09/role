@@ -14,7 +14,6 @@ Resources:
       Handler: index.lambda_handler
       Timeout: 30
       CodeUri: .
-
       Environment:
         Variables:
           GOOGLE_SECOPS_WEBHOOK_URL: https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs
@@ -68,4 +67,5 @@ Resources:
         - FunctionName: !ImportValue IPExpireFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
+
 
