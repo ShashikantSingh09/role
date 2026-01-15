@@ -15,12 +15,15 @@ Resources:
       Handler: index.lambda_handler
       Timeout: 30
       CodeUri: .
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+                - secretsmanager:DescribeSecret
+              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:waf-ip-manage-secops-creds*
 
-      Environment:
-        Variables:
-          GOOGLE_SECOPS_WEBHOOK_URL: https://us-chronicle.googleapis.com/v1alpha/projects/584064894854/locations/us/instances/bbb69df6-ab93-41dc-9caf-ef5300d52126/feeds/073a125c-30c7-4a60-8972-d5e9e30693e1:importPushLogs
-          GOOGLE_SECOPS_API_KEY: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:api_key}}'
-          GOOGLE_SECOPS_FEED_SECRET: '{{resolve:secretsmanager:waf-ip-manage-secops-creds:SecretString:feed_secret}}'
 
   LogsProcessorPermission:
     Type: AWS::Lambda::Permission
