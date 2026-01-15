@@ -35,7 +35,6 @@ def get_secrets():
         else:
             secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
 
-        # REQUIRED KEYS — ALL LOWERCASE
         required_keys = [
             "google_secops_webhook_url",
             "api_key",
