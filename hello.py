@@ -10,7 +10,7 @@ from botocore.exceptions import ClientError
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-SECRET_NAME = "google-secops-credentials"
+SECRET_NAME = "waf-ip-manage-secops-creds"
 
 _cached_secrets = None
 
