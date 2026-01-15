@@ -35,10 +35,11 @@ def get_secrets():
         else:
             secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
 
+        # REQUIRED KEYS — ALL LOWERCASE
         required_keys = [
             "google_secops_webhook_url",
-            "google_secops_api_key",
-            "google_secops_feed_secret",
+            "api_key",
+            "feed_secret",
         ]
 
         for key in required_keys:
@@ -59,7 +60,6 @@ def lambda_handler(event, context):
     """
     Decode CloudWatch Logs subscription events and forward
     them to Google SecOps (Chronicle).
-    Safely ignores non-CloudWatch invocations.
     """
 
     if (
@@ -68,7 +68,6 @@ def lambda_handler(event, context):
         or "data" not in event.get("awslogs", {})
     ):
         logger.info("Not a CloudWatch Logs subscription event. Event ignored.")
-        logger.debug("Received event: %s", json.dumps(event))
         return {
             "statusCode": 200,
             "body": "Ignored non-CloudWatch Logs event",
@@ -76,9 +75,11 @@ def lambda_handler(event, context):
 
     try:
         secrets = get_secrets()
+
         base_url = secrets["google_secops_webhook_url"]
-        api_key = secrets["google_secops_api_key"]
-        feed_secret = secrets["google_secops_feed_secret"]
+        api_key = secrets["api_key"]
+        feed_secret = secrets["feed_secret"]
+
     except (ValueError, ClientError) as e:
         logger.error("Failed to retrieve secrets: %s", str(e))
         return {
