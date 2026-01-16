@@ -10,7 +10,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 SECRET_NAME = "waf-ip-manage-secops-creds"
-SECRETS_MANAGER_REGION = "us-east-1"
+SECRETS_MANAGER_REGION = boto3.session.Session().region_name
 _cached_secrets = None
 
 
