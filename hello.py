@@ -2,7 +2,6 @@ import json
 import gzip
 import base64
 import urllib.request
-import urllib.parse
 import logging
 import boto3
 from botocore.exceptions import ClientError
@@ -27,32 +26,26 @@ def get_secrets():
 
     client = boto3.client("secretsmanager")
 
-    try:
-        response = client.get_secret_value(SecretId=SECRET_NAME)
+    response = client.get_secret_value(SecretId=SECRET_NAME)
 
-        if "SecretString" in response:
-            secret_data = json.loads(response["SecretString"])
-        else:
-            secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
+    if "SecretString" in response:
+        secret_data = json.loads(response["SecretString"])
+    else:
+        secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
 
-        required_keys = [
-            "google_secops_webhook_url",
-            "api_key",
-            "feed_secret",
-        ]
+    required_keys = [
+        "google_secops_webhook_url",
+        "api_key",
+        "feed_secret",
+    ]
 
-        for key in required_keys:
-            if key not in secret_data:
-                raise ValueError(f"Missing required key '{key}' in secret")
+    for key in required_keys:
+        if key not in secret_data:
+            raise ValueError(f"Missing required key '{key}' in secret")
 
-        _cached_secrets = secret_data
-        logger.info("Successfully retrieved secrets from Secrets Manager")
-        return _cached_secrets
-
-    except ClientError as e:
-        error_code = e.response["Error"]["Code"]
-        logger.error("Failed to retrieve secret: %s - %s", error_code, str(e))
-        raise
+    _cached_secrets = secret_data
+    logger.info("Secrets loaded from Secrets Manager")
+    return _cached_secrets
 
 
 def lambda_handler(event, context):
@@ -74,25 +67,15 @@ def lambda_handler(event, context):
 
     try:
         secrets = get_secrets()
-
         base_url = secrets["google_secops_webhook_url"]
         api_key = secrets["api_key"]
         feed_secret = secrets["feed_secret"]
-
     except (ValueError, ClientError) as e:
         logger.error("Failed to retrieve secrets: %s", str(e))
         return {
             "statusCode": 500,
             "body": "Failed to retrieve secrets from Secrets Manager",
         }
-
-    params = urllib.parse.urlencode(
-        {
-            "key": api_key,
-            "secret": feed_secret,
-        }
-    )
-    authenticated_url = f"{base_url}?{params}"
 
     try:
         compressed_data = base64.b64decode(event["awslogs"]["data"])
@@ -124,11 +107,14 @@ def lambda_handler(event, context):
         payload_bytes = json.dumps(batch).encode("utf-8")
 
         request = urllib.request.Request(
-            authenticated_url,
+            base_url,
             data=payload_bytes,
             headers={
                 "Content-Type": "application/json",
                 "User-Agent": "aws-cloudwatch-log-forwarder",
+
+                "X-Goog-Api-Key": api_key,
+                "X-Goog-Feed-Secret": feed_secret,
             },
             method="POST",
         )
