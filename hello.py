@@ -98,7 +98,7 @@ def lambda_handler(event, context):
                     "message": log.get("message"),
                     "logGroup": logs_payload.get("logGroup"),
                     "logStream": logs_payload.get("logStream"),
-                    "awsRegion": boto3.session.Session().region_name,
+                    "awsRegion": SECRETS_MANAGER_REGION,
                     "functionArn": context.invoked_function_arn,
                     "requestId": context.aws_request_id,
                 }
