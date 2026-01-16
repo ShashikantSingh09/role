@@ -112,8 +112,8 @@ def lambda_handler(event, context):
             headers={
                 "Content-Type": "application/json",
                 "User-Agent": "aws-cloudwatch-log-forwarder",
-                "X-Goog-Api-Key": api_key,
-                "X-Goog-Feed-Secret": feed_secret,
+                "X-goog-api-key": api_key,
+                "X-Webhook-Access-Key": feed_secret,
             },
             method="POST",
         )
