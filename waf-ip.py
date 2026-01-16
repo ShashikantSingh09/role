@@ -2,7 +2,6 @@ import json
 import gzip
 import base64
 import urllib.request
-import urllib.parse
 import logging
 import boto3
 from botocore.exceptions import ClientError
@@ -16,16 +15,12 @@ _cached_secrets = None
 
 
 def get_secrets():
-    """
-    Retrieve secrets from AWS Secrets Manager.
-    """
     global _cached_secrets
 
     if _cached_secrets is not None:
         return _cached_secrets
 
     client = boto3.client("secretsmanager", region_name=SECRETS_MANAGER_REGION)
-
     response = client.get_secret_value(SecretId=SECRET_NAME)
 
     if "SecretString" in response:
@@ -33,9 +28,7 @@ def get_secrets():
     else:
         secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
 
-    required_keys = ["google_secops_webhook_url", "api_key", "feed_secret"]
-
-    for key in required_keys:
+    for key in ("google_secops_webhook_url", "api_key", "feed_secret"):
         if key not in secret_data:
             raise ValueError(f"Missing required key '{key}' in secret")
 
@@ -45,9 +38,7 @@ def get_secrets():
 
 
 def lambda_handler(event, context):
-    """
-    Decode CloudWatch Logs and forward to Google SecOps.
-    """
+
     if (
         not isinstance(event, dict)
         or "awslogs" not in event
@@ -61,12 +52,9 @@ def lambda_handler(event, context):
         base_url = secrets["google_secops_webhook_url"]
         api_key = secrets["api_key"]
         feed_secret = secrets["feed_secret"]
-    except (ValueError, ClientError) as e:
+    except Exception as e:
         logger.error("Failed to retrieve secrets: %s", str(e))
-        return {
-            "statusCode": 500,
-            "body": "Failed to retrieve secrets from Secrets Manager",
-        }
+        return {"statusCode": 500, "body": "Failed to retrieve secrets"}
 
     try:
         compressed_data = base64.b64decode(event["awslogs"]["data"])
@@ -75,12 +63,10 @@ def lambda_handler(event, context):
 
         log_events = logs_payload.get("logEvents", [])
         if not log_events:
-            logger.info("No log events found")
             return {"statusCode": 200, "body": "No log events"}
 
-        batch = []
-        for log in log_events:
-            batch.append({
+        batch = [
+            {
                 "timestamp": log.get("timestamp"),
                 "message": log.get("message"),
                 "logGroup": logs_payload.get("logGroup"),
@@ -88,52 +74,28 @@ def lambda_handler(event, context):
                 "awsRegion": boto3.session.Session().region_name,
                 "functionArn": context.invoked_function_arn,
                 "requestId": context.aws_request_id,
-            })
+            }
+            for log in log_events
+        ]
 
         payload_bytes = json.dumps(batch).encode("utf-8")
 
-        params = urllib.parse.urlencode({'key': api_key})
-        
-        separator = "&" if "?" in base_url else "?"
-        final_url = f"{base_url}{separator}{params}"
-
-
-        headers = {
-            "Content-Type": "application/json",
-            "User-Agent": "aws-cloudwatch-log-forwarder",
-            "X-Goog-Feed-Secret": feed_secret
-        }
-
         request = urllib.request.Request(
-            final_url,
+            base_url,
             data=payload_bytes,
-            headers=headers,
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": "aws-cloudwatch-log-forwarder",
+                "X-goog-api-key": api_key,
+                "X-Webhook-Access-Key": feed_secret,
+            },
             method="POST",
         )
 
         with urllib.request.urlopen(request, timeout=10) as response:
-            logger.info(
-                "Forwarded %d logs, Chronicle response: %s",
-                len(batch),
-                response.status,
-            )
-            return {
-                "statusCode": response.status,
-                "body": f"Forwarded {len(batch)} log events",
-            }
-
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8') if e.fp else ""
-        logger.error(f"HTTP Error {e.code}: {e.reason} | Body: {error_body}")
-        
-        return {
-            "statusCode": e.code,
-            "body": f"HTTP Error: {e.reason}. Check CloudWatch logs for details.",
-        }
+            logger.info("Forwarded %d logs, Chronicle response: %s", len(batch), response.status)
+            return {"statusCode": response.status, "body": "Logs forwarded"}
 
     except Exception as exc:
         logger.exception("Failed processing CloudWatch Logs event")
-        return {
-            "statusCode": 500,
-            "body": str(exc),
-        }
+        return {"statusCode": 500, "body": str(exc)}
