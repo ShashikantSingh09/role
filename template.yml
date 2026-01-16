@@ -11,7 +11,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: waf-ip-manage-secops-cloudwatch-logs-processor
-      Runtime: python3.11
+      Runtime: python3.12
       Handler: index.lambda_handler
       Timeout: 30
       CodeUri: .
