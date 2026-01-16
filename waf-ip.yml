@@ -10,7 +10,7 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: waf-ip-manage-cloudwatch-logs-processor
-      Runtime: python3.12
+      Runtime: python3.14
       Handler: index.lambda_handler
       Timeout: 30
       CodeUri: .
@@ -71,6 +71,7 @@ Resources:
         - FunctionName: !ImportValue IPExpireFunctionName
       FilterPattern: ""
       DestinationArn: !GetAtt LogsProcessorFunction.Arn
+
 
 
 
