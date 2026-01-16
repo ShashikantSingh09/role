@@ -106,22 +106,16 @@ def lambda_handler(event, context):
             )
 
         payload_bytes = json.dumps(batch).encode("utf-8")
-
-        # --- KEY CHANGE: Split Auth between URL and Header ---
-        
-        # 1. API Key goes into URL parameters (Required by Google to fix 403)
+  
         params = urllib.parse.urlencode({'key': api_key})
-        
-        # Determine if we need ? or & to append the key
         separator = "&" if "?" in base_url else "?"
         final_url = f"{base_url}{separator}{params}"
 
-        # 2. Feed Secret goes into Headers (Best Practice to fix Security Warning)
+
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "aws-cloudwatch-log-forwarder",
             "X-Goog-Feed-Secret": feed_secret, 
-            # Note: Do NOT put X-Goog-Api-Key here, it is ignored by this endpoint
         }
 
         request = urllib.request.Request(
@@ -143,7 +137,6 @@ def lambda_handler(event, context):
             }
 
     except urllib.error.HTTPError as e:
-        # Improved error logging to see the reason for failures
         error_body = e.read().decode() if e.fp else ""
         logger.error(f"HTTP Error {e.code}: {e.reason} | Body: {error_body}")
         return {
@@ -157,3 +150,4 @@ def lambda_handler(event, context):
             "statusCode": 500,
             "body": str(exc),
         }
+
