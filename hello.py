@@ -10,7 +10,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 SECRET_NAME = "waf-ip-manage-secops-creds"
-
+SECRETS_MANAGER_REGION = "us-east-1"
 _cached_secrets = None
 
 
@@ -24,7 +24,7 @@ def get_secrets():
     if _cached_secrets is not None:
         return _cached_secrets
 
-    client = boto3.client("secretsmanager")
+    client = boto3.client("secretsmanager", region_name=SECRETS_MANAGER_REGION)
 
     response = client.get_secret_value(SecretId=SECRET_NAME)
 
