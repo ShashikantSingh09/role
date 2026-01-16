@@ -18,7 +18,6 @@ _cached_secrets = None
 def get_secrets():
     """
     Retrieve secrets from AWS Secrets Manager.
-    Caches the result to avoid repeated API calls on warm invocations.
     """
     global _cached_secrets
 
@@ -34,11 +33,7 @@ def get_secrets():
     else:
         secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
 
-    required_keys = [
-        "google_secops_webhook_url",
-        "api_key",
-        "feed_secret",
-    ]
+    required_keys = ["google_secops_webhook_url", "api_key", "feed_secret"]
 
     for key in required_keys:
         if key not in secret_data:
@@ -51,20 +46,15 @@ def get_secrets():
 
 def lambda_handler(event, context):
     """
-    Decode CloudWatch Logs subscription events and forward
-    them to Google SecOps (Chronicle).
+    Decode CloudWatch Logs and forward to Google SecOps.
     """
-
     if (
         not isinstance(event, dict)
         or "awslogs" not in event
         or "data" not in event.get("awslogs", {})
     ):
         logger.info("Not a CloudWatch Logs subscription event. Event ignored.")
-        return {
-            "statusCode": 200,
-            "body": "Ignored non-CloudWatch Logs event",
-        }
+        return {"statusCode": 200, "body": "Ignored non-CloudWatch Logs event"}
 
     try:
         secrets = get_secrets()
@@ -86,28 +76,24 @@ def lambda_handler(event, context):
         log_events = logs_payload.get("logEvents", [])
         if not log_events:
             logger.info("No log events found")
-            return {
-                "statusCode": 200,
-                "body": "No log events",
-            }
+            return {"statusCode": 200, "body": "No log events"}
 
         batch = []
         for log in log_events:
-            batch.append(
-                {
-                    "timestamp": log.get("timestamp"),
-                    "message": log.get("message"),
-                    "logGroup": logs_payload.get("logGroup"),
-                    "logStream": logs_payload.get("logStream"),
-                    "awsRegion": boto3.session.Session().region_name,
-                    "functionArn": context.invoked_function_arn,
-                    "requestId": context.aws_request_id,
-                }
-            )
+            batch.append({
+                "timestamp": log.get("timestamp"),
+                "message": log.get("message"),
+                "logGroup": logs_payload.get("logGroup"),
+                "logStream": logs_payload.get("logStream"),
+                "awsRegion": boto3.session.Session().region_name,
+                "functionArn": context.invoked_function_arn,
+                "requestId": context.aws_request_id,
+            })
 
         payload_bytes = json.dumps(batch).encode("utf-8")
-  
+
         params = urllib.parse.urlencode({'key': api_key})
+        
         separator = "&" if "?" in base_url else "?"
         final_url = f"{base_url}{separator}{params}"
 
@@ -115,7 +101,7 @@ def lambda_handler(event, context):
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "aws-cloudwatch-log-forwarder",
-            "X-Goog-Feed-Secret": feed_secret, 
+            "X-Goog-Feed-Secret": feed_secret
         }
 
         request = urllib.request.Request(
@@ -137,11 +123,12 @@ def lambda_handler(event, context):
             }
 
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode() if e.fp else ""
+        error_body = e.read().decode('utf-8') if e.fp else ""
         logger.error(f"HTTP Error {e.code}: {e.reason} | Body: {error_body}")
+        
         return {
             "statusCode": e.code,
-            "body": f"HTTP Error: {e.reason}",
+            "body": f"HTTP Error: {e.reason}. Check CloudWatch logs for details.",
         }
 
     except Exception as exc:
@@ -150,4 +137,3 @@ def lambda_handler(event, context):
             "statusCode": 500,
             "body": str(exc),
         }
-
