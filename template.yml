@@ -46,17 +46,6 @@ Parameters:
 
 Resources:
 
-  LambdaInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
-      Principal: s3.amazonaws.com
-      SourceArn: !Sub arn:aws:s3:::${BucketName}/*
-
-  ############################
-  # Firehose IAM Role
-  ############################
   DeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -96,9 +85,6 @@ Resources:
       Roles:
         - !Ref DeliveryRole
 
-  ############################
-  # Single Firehose Stream
-  ############################
   CloudtrailDeliveryStream:
     Type: AWS::KinesisFirehose::DeliveryStream
     Properties:
@@ -107,7 +93,9 @@ Resources:
       HttpEndpointDestinationConfiguration:
         EndpointConfiguration:
           Name: google-secops
-          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
+          Url: !Sub >
+            {{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}
+            ?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
@@ -117,10 +105,6 @@ Resources:
           BucketARN: !Sub arn:aws:s3:::${BucketName}
           RoleARN: !GetAtt DeliveryRole.Arn
           CompressionFormat: GZIP
-
-  ############################
-  # Lambda IAM Role
-  ############################
   CloudtrailLogsFilteringFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -156,9 +140,6 @@ Resources:
         - Key: lambda:createdBy
           Value: SAM
 
-  ############################
-  # Lambda Function
-  ############################
   CloudtrailLogsFilteringFunction:
     Type: AWS::Serverless::Function
     Description: CloudTrail Lambda function that filters and forwards logs to Firehose
@@ -176,3 +157,15 @@ Resources:
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
           REGION_NAME: !Ref RegionName
+
+      Events:
+        CloudTrailS3Event:
+          Type: S3
+          Properties:
+            Bucket: !Ref BucketName
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: .json.gz
