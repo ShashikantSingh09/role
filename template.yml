@@ -164,7 +164,7 @@ Resources:
     Description: CloudTrail Lambda function that filters and forwards logs to Firehose
     Properties:
       FunctionName: cloudtrail-logs-filtering
-      Runtime: python3.8
+      Runtime: python3.12
       Handler: cloudtrail-logs-filtering.lambda_handler
       CodeUri: .
       MemorySize: 256
