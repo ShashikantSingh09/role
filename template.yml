@@ -46,6 +46,14 @@ Parameters:
 
 Resources:
 
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::${BucketName}/*
+
   DeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -96,13 +104,15 @@ Resources:
           Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
         BufferingHints:
           IntervalInSeconds: 300
-          SizeInMBs: 64
+          SizeInMBs: 100
         RetryOptions:
           DurationInSeconds: 300
         S3Configuration:
           BucketARN: !Sub arn:aws:s3:::${BucketName}
           RoleARN: !GetAtt DeliveryRole.Arn
           CompressionFormat: GZIP
+
+
   CloudtrailLogsFilteringFunctionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -155,15 +165,3 @@ Resources:
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
           REGION_NAME: !Ref RegionName
-
-      Events:
-        CloudTrailS3Event:
-          Type: S3
-          Properties:
-            Bucket: !Ref BucketName
-            Events: s3:ObjectCreated:*
-            Filter:
-              S3Key:
-                Rules:
-                  - Name: suffix
-                    Value: .json.gz
