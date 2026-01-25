@@ -1,137 +1,126 @@
-import json
 import gzip
-import base64
-import urllib.request
+import json
 import logging
+import os
+import sys
 import boto3
-from botocore.exceptions import ClientError
+import re
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-SECRET_NAME = "waf-ip-manage-secops-creds"
-SECRETS_MANAGER_REGION = boto3.session.Session().region_name
-_cached_secrets = None
+firehose_client = boto3.client('firehose')
+
+EVENT_NAME_EXCLUDED_LIST = os.environ["EVENT_NAME_EXCLUDED_LIST"].split(",")
+EVENT_ROLE_ARN_EXCLUDED_LIST = os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(",")
+
+STREAM_NAME = os.environ["STREAM_NAME"]
+REGION_NAME = os.environ["REGION_NAME"]
+
+MAX_RECORD_BATCH_SIZE = 1000000  # 1 MB
+MAX_RECORD_BATCH_LENGTH = 500
 
 
-def get_secrets():
+def check_event_excluded(event):
     """
-    Retrieve secrets from AWS Secrets Manager.
-    Caches the result to avoid repeated API calls on warm invocations.
+    Excludes events based on eventName + role ARN match
     """
-    global _cached_secrets
+    if event.get("eventName") not in EVENT_NAME_EXCLUDED_LIST:
+        return False
 
-    if _cached_secrets is not None:
-        return _cached_secrets
-
-    client = boto3.client("secretsmanager", region_name=SECRETS_MANAGER_REGION)
-
-    response = client.get_secret_value(SecretId=SECRET_NAME)
-
-    if "SecretString" in response:
-        secret_data = json.loads(response["SecretString"])
-    else:
-        secret_data = json.loads(base64.b64decode(response["SecretBinary"]))
-
-    required_keys = [
-        "google_secops_webhook_url",
-        "api_key",
-        "feed_secret",
+    roles = [
+        event.get('userIdentity', {}).get('arn'),
+        event.get('userIdentity', {}).get('sessionContext', {})
+             .get('sessionIssuer', {}).get('arn')
     ]
 
-    for key in required_keys:
-        if key not in secret_data:
-            raise ValueError(f"Missing required key '{key}' in secret")
+    if isinstance(event.get('resources'), list):
+        for r in event['resources']:
+            if isinstance(r, dict) and "ARN" in r:
+                roles.append(r["ARN"])
 
-    _cached_secrets = secret_data
-    logger.info("Secrets loaded from Secrets Manager")
-    return _cached_secrets
+    for role in roles:
+        if isinstance(role, str):
+            for excluded in EVENT_ROLE_ARN_EXCLUDED_LIST:
+                if role.endswith(excluded):
+                    return True
+
+    return False
+
+
+def parse_gzip_log_file(s3, bucket, key):
+    response = s3.get_object(Bucket=bucket, Key=key)
+    with gzip.GzipFile(fileobj=response["Body"]) as f:
+        return json.loads(f.read().decode("utf-8"))
+
+
+def filter_cloudtrail_events(data):
+    """
+    Filters CloudTrail events and batches them for Firehose
+    """
+    if "Records" not in data:
+        return []
+
+    batches = []
+    current_batch = []
+
+    for record in data["Records"]:
+        if sys.getsizeof(record) > MAX_RECORD_BATCH_SIZE:
+            logger.warning("Single record exceeds Firehose size limit")
+            continue
+
+        if check_event_excluded(record):
+            continue
+
+        serialized = json.dumps(current_batch + [record])
+        if sys.getsizeof(serialized) > MAX_RECORD_BATCH_SIZE:
+            batches.append(json.dumps(current_batch))
+            current_batch = [record]
+        else:
+            current_batch.append(record)
+
+        if len(current_batch) == MAX_RECORD_BATCH_LENGTH:
+            batches.append(json.dumps(current_batch))
+            current_batch = []
+
+    if current_batch:
+        batches.append(json.dumps(current_batch))
+
+    return batches
+
+
+def send_to_firehose(batches):
+    for batch in batches:
+        firehose_client.put_record_batch(
+            DeliveryStreamName=STREAM_NAME,
+            Records=[{"Data": batch}]
+        )
 
 
 def lambda_handler(event, context):
-    """
-    Decode CloudWatch Logs subscription events and forward
-    them to Google SecOps (Chronicle).
-    """
-
-    if (
-        not isinstance(event, dict)
-        or "awslogs" not in event
-        or "data" not in event.get("awslogs", {})
-    ):
-        logger.info("Not a CloudWatch Logs subscription event. Event ignored.")
-        return {
-            "statusCode": 200,
-            "body": "Ignored non-CloudWatch Logs event",
-        }
+    logger.info("Starting CloudTrail log processing")
 
     try:
-        secrets = get_secrets()
-        base_url = secrets["google_secops_webhook_url"]
-        api_key = secrets["api_key"]
-        feed_secret = secrets["feed_secret"]
-    except (ValueError, ClientError) as e:
-        logger.error("Failed to retrieve secrets: %s", str(e))
-        return {
-            "statusCode": 500,
-            "body": "Failed to retrieve secrets from Secrets Manager",
-        }
+        s3 = boto3.client("s3", region_name=REGION_NAME)
 
-    try:
-        compressed_data = base64.b64decode(event["awslogs"]["data"])
-        decompressed_data = gzip.decompress(compressed_data)
-        logs_payload = json.loads(decompressed_data)
+        record = event["Records"][0]
+        bucket = record["s3"]["bucket"]["name"]
+        key = record["s3"]["object"]["key"]
 
-        log_events = logs_payload.get("logEvents", [])
-        if not log_events:
-            logger.info("No log events found")
-            return {
-                "statusCode": 200,
-                "body": "No log events",
-            }
+        content = parse_gzip_log_file(s3, bucket, key)
+        batches = filter_cloudtrail_events(content)
 
-        batch = []
-        for log in log_events:
-            batch.append(
-                {
-                    "timestamp": log.get("timestamp"),
-                    "message": log.get("message"),
-                    "logGroup": logs_payload.get("logGroup"),
-                    "logStream": logs_payload.get("logStream"),
-                    "awsRegion": SECRETS_MANAGER_REGION,
-                    "functionArn": context.invoked_function_arn,
-                    "requestId": context.aws_request_id,
-                }
-            )
+        if batches:
+            send_to_firehose(batches)
+            logger.info("CloudTrail logs successfully sent to Firehose")
+        else:
+            logger.info("No valid CloudTrail records after filtering")
 
-        payload_bytes = json.dumps(batch).encode("utf-8")
+    except Exception as e:
+        logger.exception("Failed processing CloudTrail logs")
+        raise e
 
-        request = urllib.request.Request(
-            base_url,
-            data=payload_bytes,
-            headers={
-                "Content-Type": "application/json",
-                "User-Agent": "aws-cloudwatch-log-forwarder",
-                "X-goog-api-key": api_key,
-                "X-Webhook-Access-Key": feed_secret,
-            },
-            method="POST",
-        )
-
-        with urllib.request.urlopen(request, timeout=10) as response:
-            logger.info(
-                "Forwarded %d logs, Chronicle response: %s",
-                len(batch),
-                response.status,
-            )
-            return {
-                "statusCode": response.status,
-                "body": f"Forwarded {len(batch)} log events",
-            }
-
-    except Exception as exc:
-        logger.exception("Failed processing CloudWatch Logs event")
-        return {
-            "statusCode": 500,
-            "body": str(exc),
-        }
+    return {
+        "statusCode": 200,
+        "body": "Processing complete"
+    }
