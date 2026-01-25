@@ -93,9 +93,7 @@ Resources:
       HttpEndpointDestinationConfiguration:
         EndpointConfiguration:
           Name: google-secops
-          Url: !Sub >
-            {{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}
-            ?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}
+          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
