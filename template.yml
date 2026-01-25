@@ -104,7 +104,7 @@ Resources:
           Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
         BufferingHints:
           IntervalInSeconds: 300
-          SizeInMBs: 100
+          SizeInMBs: 64
         RetryOptions:
           DurationInSeconds: 300
         S3Configuration:
