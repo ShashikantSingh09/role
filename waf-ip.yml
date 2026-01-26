@@ -84,9 +84,7 @@ Resources:
 
         EndpointConfiguration:
           Name: google-secops
-          Url: !Sub >
-            {{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}
-            ?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}
+          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
 
         BufferingHints:
           IntervalInSeconds: 300
@@ -145,3 +143,4 @@ Resources:
           STREAM_NAME: !Ref StreamName
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
+
