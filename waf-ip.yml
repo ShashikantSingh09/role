@@ -7,48 +7,52 @@ Parameters:
   GoogleSecOpsSecretName:
     Type: String
     Default: google-secops-credentials
+    Description: Secrets Manager secret name containing Google SecOps credentials
 
   GoogleSecOpsEndpointUrl:
     Type: String
     Default: Secops-endpoint_url
+    Description: Key name for the endpoint URL inside the secret
 
   GoogleSecOpsApiKey:
     Type: String
     Default: Secops-api_key
+    Description: Key name for the API key inside the secret
 
   EventRole:
     Type: String
     Default: ExportTaskRole,ExtractRole,Extract-10J5Z8O7JDV9A,EmrFS-Session,Extract-JUKG0T0AARWX,XProtectMRTDynamoDBTableReadOnlyRole,spinnakerManaged-terraform,newrelic-infrastructure
+    Description: List of event role ARNs to be excluded from Google SecOps
 
   EventName:
     Type: String
     Default: Decrypt,GenerateDataKey,AssumeRole,GetBucketLocation,Encrypt
+    Description: List of event names to be excluded from Google SecOps
 
   StreamName:
     Type: String
     Default: aws-cloudtrail-logs-to-google-secops
+    Description: Name of the Kinesis Firehose Delivery Stream
 
   BucketName:
     Type: String
     Default: jamf-global-cloudtrail-logs
+    Description: CloudTrail S3 bucket name
 
   RegionName:
     Type: String
     Default: us-east-1
+    Description: Region where CloudTrail bucket exists
 
 Resources:
 
-  FirehoseLogGroup:
-    Type: AWS::Logs::LogGroup
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
     Properties:
-      LogGroupName: !Sub /aws/kinesisfirehose/${StreamName}
-      RetentionInDays: 14
-
-  FirehoseLogStream:
-    Type: AWS::Logs::LogStream
-    Properties:
-      LogGroupName: !Ref FirehoseLogGroup
-      LogStreamName: HttpEndpointDelivery
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::${BucketName}
 
   DeliveryRole:
     Type: AWS::IAM::Role
@@ -83,11 +87,9 @@ Resources:
 
           - Effect: Allow
             Action:
-              - logs:CreateLogStream
               - logs:PutLogEvents
             Resource:
-              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
-
+              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
       Roles:
         - !Ref DeliveryRole
 
@@ -96,7 +98,6 @@ Resources:
     Properties:
       DeliveryStreamName: !Ref StreamName
       DeliveryStreamType: DirectPut
-
       HttpEndpointDestinationConfiguration:
         EndpointConfiguration:
           Name: google-secops
@@ -104,19 +105,17 @@ Resources:
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
-
         RetryOptions:
           DurationInSeconds: 300
-
-        CloudWatchLoggingOptions:
-          Enabled: true
-          LogGroupName: !Ref FirehoseLogGroup
-          LogStreamName: !Ref FirehoseLogStream
-
         S3Configuration:
           BucketARN: !Sub arn:aws:s3:::${BucketName}
           RoleARN: !GetAtt DeliveryRole.Arn
           CompressionFormat: GZIP
+          
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Sub /aws/kinesisfirehose/${StreamName}
+          LogStreamName: HttpEndpointDelivery
 
   CloudtrailLogsFilteringFunctionRole:
     Type: AWS::IAM::Role
@@ -139,12 +138,23 @@ Resources:
             Statement:
               - Effect: Allow
                 Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub arn:aws:s3:::${BucketName}/*
+
+              - Effect: Allow
+                Action:
                   - firehose:PutRecordBatch
                 Resource:
                   - !GetAtt CloudtrailDeliveryStream.Arn
 
+      Tags:
+        - Key: lambda:createdBy
+          Value: SAM
+
   CloudtrailLogsFilteringFunction:
     Type: AWS::Serverless::Function
+    Description: CloudTrail Lambda function that filters and forwards logs to Firehose
     Properties:
       FunctionName: cloudtrail-logs-filtering
       Runtime: python3.12
@@ -158,4 +168,4 @@ Resources:
           STREAM_NAME: !Ref StreamName
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
-
+          REGION_NAME: !Ref RegionName
