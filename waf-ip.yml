@@ -1,6 +1,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: CloudTrail ALL API calls → Lambda → Firehose → Google SecOps
+Description: Firehose Delivery Stream to ingest CloudTrail logs to Google SecOps
+  with Lambda-based filtering
 
 Parameters:
   GoogleSecOpsSecretName:
@@ -37,6 +38,18 @@ Parameters:
 
 Resources:
 
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/kinesisfirehose/${StreamName}
+      RetentionInDays: 14
+
+  FirehoseLogStream:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: HttpEndpointDelivery
+
   DeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -70,9 +83,10 @@ Resources:
 
           - Effect: Allow
             Action:
+              - logs:CreateLogStream
               - logs:PutLogEvents
             Resource:
-              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
 
       Roles:
         - !Ref DeliveryRole
@@ -82,15 +96,26 @@ Resources:
     Properties:
       DeliveryStreamName: !Ref StreamName
       DeliveryStreamType: DirectPut
+
       HttpEndpointDestinationConfiguration:
         EndpointConfiguration:
           Name: google-secops
-          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
+          Url: !Sub >
+            {{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}
+            ?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}
+
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
+
         RetryOptions:
           DurationInSeconds: 300
+
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: !Ref FirehoseLogStream
+
         S3Configuration:
           BucketARN: !Sub arn:aws:s3:::${BucketName}
           RoleARN: !GetAtt DeliveryRole.Arn
@@ -136,27 +161,3 @@ Resources:
           STREAM_NAME: !Ref StreamName
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
-          REGION_NAME: !Ref RegionName
-
-  CloudTrailAllApiCallsRule:
-    Type: AWS::Events::Rule
-    Properties:
-      Name: cloudtrail-all-api-calls
-      Description: Trigger Lambda for ALL AWS API calls via CloudTrail
-      EventPattern:
-        source:
-          - aws.cloudtrail
-        detail-type:
-          - AWS API Call via CloudTrail
-      Targets:
-        - Arn: !GetAtt CloudtrailLogsFilteringFunction.Arn
-          Id: CloudTrailAllApiCallsTarget
-
-  LambdaInvokePermissionEventBridge:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt CloudTrailAllApiCallsRule.Arn
-
