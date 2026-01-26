@@ -52,7 +52,7 @@ Resources:
       Action: lambda:InvokeFunction
       FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
       Principal: s3.amazonaws.com
-      SourceArn: !Sub arn:aws:s3:::${BucketName}/*
+      SourceArn: !Sub arn:aws:s3:::${BucketName}
 
   DeliveryRole:
     Type: AWS::IAM::Role
