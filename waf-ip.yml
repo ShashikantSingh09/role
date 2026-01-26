@@ -1,77 +1,163 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  CloudWatch Logs processor Lambda that forwards WAF IP management
-  logs directly to Google SecOps (Chronicle) via webhook.
+Description: CloudTrail ALL API calls → Lambda → Firehose → Google SecOps
+
+Parameters:
+  GoogleSecOpsSecretName:
+    Type: String
+    Default: google-secops-credentials
+
+  GoogleSecOpsEndpointUrl:
+    Type: String
+    Default: Secops-endpoint_url
+
+  GoogleSecOpsApiKey:
+    Type: String
+    Default: Secops-api_key
+
+  EventRole:
+    Type: String
+    Default: ExportTaskRole,ExtractRole,Extract-10J5Z8O7JDV9A,EmrFS-Session,Extract-JUKG0T0AARWX,XProtectMRTDynamoDBTableReadOnlyRole,spinnakerManaged-terraform,newrelic-infrastructure
+
+  EventName:
+    Type: String
+    Default: Decrypt,GenerateDataKey,AssumeRole,GetBucketLocation,Encrypt
+
+  StreamName:
+    Type: String
+    Default: aws-cloudtrail-logs-to-google-secops
+
+  BucketName:
+    Type: String
+    Default: jamf-global-cloudtrail-logs
+
+  RegionName:
+    Type: String
+    Default: us-east-1
 
 Resources:
 
-  LogsProcessorFunction:
-    Type: AWS::Serverless::Function
+  DeliveryRole:
+    Type: AWS::IAM::Role
     Properties:
-      FunctionName: waf-ip-manage-cloudwatch-logs-processor
-      Runtime: python3.14
-      Handler: index.lambda_handler
-      Timeout: 30
-      CodeUri: .
+      RoleName: cloudtrail-to-google-secops-delivery-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+
+  DeliveryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: cloudtrail-to-google-secops-firehose-policy
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:AbortMultipartUpload
+              - s3:GetBucketLocation
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:ListBucketMultipartUploads
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::${BucketName}
+              - !Sub arn:aws:s3:::${BucketName}/*
+
+          - Effect: Allow
+            Action:
+              - logs:PutLogEvents
+            Resource:
+              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
+
+      Roles:
+        - !Ref DeliveryRole
+
+  CloudtrailDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName: !Ref StreamName
+      DeliveryStreamType: DirectPut
+      HttpEndpointDestinationConfiguration:
+        EndpointConfiguration:
+          Name: google-secops
+          Url: !Sub >
+            {{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}
+            ?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}
+        BufferingHints:
+          IntervalInSeconds: 300
+          SizeInMBs: 64
+        RetryOptions:
+          DurationInSeconds: 300
+        S3Configuration:
+          BucketARN: !Sub arn:aws:s3:::${BucketName}
+          RoleARN: !GetAtt DeliveryRole.Arn
+          CompressionFormat: GZIP
+
+  CloudtrailLogsFilteringFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
       Policies:
-        - Version: '2012-10-17'
-          Statement:
-            - Effect: Allow
-              Action:
-                - secretsmanager:GetSecretValue
-                - secretsmanager:DescribeSecret
-              Resource: !Sub arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:waf-ip-manage-secops-creds*
+        - PolicyName: CloudtrailLogsFilteringInlinePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - firehose:PutRecordBatch
+                Resource:
+                  - !GetAtt CloudtrailDeliveryStream.Arn
 
-  LogsProcessorPermission:
+  CloudtrailLogsFilteringFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cloudtrail-logs-filtering
+      Runtime: python3.12
+      Handler: cloudtrail-logs-filtering.lambda_handler
+      CodeUri: .
+      MemorySize: 256
+      Timeout: 500
+      Role: !GetAtt CloudtrailLogsFilteringFunctionRole.Arn
+      Environment:
+        Variables:
+          STREAM_NAME: !Ref StreamName
+          EVENT_NAME_EXCLUDED_LIST: !Ref EventName
+          EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
+          REGION_NAME: !Ref RegionName
+
+  CloudTrailAllApiCallsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: cloudtrail-all-api-calls
+      Description: Trigger Lambda for ALL AWS API calls via CloudTrail
+      EventPattern:
+        source:
+          - aws.cloudtrail
+        detail-type:
+          - AWS API Call via CloudTrail
+      Targets:
+        - Arn: !GetAtt CloudtrailLogsFilteringFunction.Arn
+          Id: CloudTrailAllApiCallsTarget
+
+  LambdaInvokePermissionEventBridge:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !GetAtt LogsProcessorFunction.Arn
       Action: lambda:InvokeFunction
-      Principal: !Sub logs.${AWS::Region}.amazonaws.com
-      SourceArn: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*:*
-
-  BlocklistIpFunctionSubscriptionFilter:
-    Type: AWS::Logs::SubscriptionFilter
-    DependsOn: LogsProcessorPermission
-    Properties:
-      LogGroupName: !Sub
-        - "/aws/lambda/${FunctionName}"
-        - FunctionName: !ImportValue BlocklistIpFunctionName
-      FilterPattern: ""
-      DestinationArn: !GetAtt LogsProcessorFunction.Arn
-
-  SafelistIpFunctionSubscriptionFilter:
-    Type: AWS::Logs::SubscriptionFilter
-    DependsOn: LogsProcessorPermission
-    Properties:
-      LogGroupName: !Sub
-        - "/aws/lambda/${FunctionName}"
-        - FunctionName: !ImportValue SafelistIpFunctionName
-      FilterPattern: ""
-      DestinationArn: !GetAtt LogsProcessorFunction.Arn
-
-  IPPropagateFunctionSubscriptionFilter:
-    Type: AWS::Logs::SubscriptionFilter
-    DependsOn: LogsProcessorPermission
-    Properties:
-      LogGroupName: !Sub
-        - "/aws/lambda/${FunctionName}"
-        - FunctionName: !ImportValue IPPropagateFunctionName
-      FilterPattern: ""
-      DestinationArn: !GetAtt LogsProcessorFunction.Arn
-
-  IPExpireFunctionSubscriptionFilter:
-    Type: AWS::Logs::SubscriptionFilter
-    DependsOn: LogsProcessorPermission
-    Properties:
-      LogGroupName: !Sub
-        - "/aws/lambda/${FunctionName}"
-        - FunctionName: !ImportValue IPExpireFunctionName
-      FilterPattern: ""
-      DestinationArn: !GetAtt LogsProcessorFunction.Arn
-
-
-
-
+      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt CloudTrailAllApiCallsRule.Arn
