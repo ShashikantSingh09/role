@@ -1,58 +1,41 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Firehose Delivery Stream to ingest CloudTrail logs to Google SecOps
-  with Lambda-based filtering
+Description: Trigger Lambda on new S3 objects and forward CloudTrail logs to Google SecOps
 
 Parameters:
   GoogleSecOpsSecretName:
     Type: String
     Default: google-secops-credentials
-    Description: Secrets Manager secret name containing Google SecOps credentials
 
   GoogleSecOpsEndpointUrl:
     Type: String
     Default: Secops-endpoint_url
-    Description: Key name for the endpoint URL inside the secret
 
   GoogleSecOpsApiKey:
     Type: String
     Default: Secops-api_key
-    Description: Key name for the API key inside the secret
 
   EventRole:
     Type: String
     Default: ExportTaskRole,ExtractRole,Extract-10J5Z8O7JDV9A,EmrFS-Session,Extract-JUKG0T0AARWX,XProtectMRTDynamoDBTableReadOnlyRole,spinnakerManaged-terraform,newrelic-infrastructure
-    Description: List of event role ARNs to be excluded from Google SecOps
 
   EventName:
     Type: String
     Default: Decrypt,GenerateDataKey,AssumeRole,GetBucketLocation,Encrypt
-    Description: List of event names to be excluded from Google SecOps
 
   StreamName:
     Type: String
     Default: aws-cloudtrail-logs-to-google-secops
-    Description: Name of the Kinesis Firehose Delivery Stream
 
   BucketName:
     Type: String
     Default: jamf-global-cloudtrail-logs
-    Description: CloudTrail S3 bucket name
 
   RegionName:
     Type: String
     Default: us-east-1
-    Description: Region where CloudTrail bucket exists
 
 Resources:
-
-  LambdaInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
-      Principal: s3.amazonaws.com
-      SourceArn: !Sub arn:aws:s3:::${BucketName}
 
   DeliveryRole:
     Type: AWS::IAM::Role
@@ -90,6 +73,7 @@ Resources:
               - logs:PutLogEvents
             Resource:
               - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
+
       Roles:
         - !Ref DeliveryRole
 
@@ -111,7 +95,6 @@ Resources:
           BucketARN: !Sub arn:aws:s3:::${BucketName}
           RoleARN: !GetAtt DeliveryRole.Arn
           CompressionFormat: GZIP
-
 
   CloudtrailLogsFilteringFunctionRole:
     Type: AWS::IAM::Role
@@ -144,13 +127,8 @@ Resources:
                 Resource:
                   - !GetAtt CloudtrailDeliveryStream.Arn
 
-      Tags:
-        - Key: lambda:createdBy
-          Value: SAM
-
   CloudtrailLogsFilteringFunction:
     Type: AWS::Serverless::Function
-    Description: CloudTrail Lambda function that filters and forwards logs to Firehose
     Properties:
       FunctionName: cloudtrail-logs-filtering
       Runtime: python3.12
@@ -165,3 +143,29 @@ Resources:
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
           REGION_NAME: !Ref RegionName
+
+  S3ObjectCreatedRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: s3-object-created-cloudtrail
+      Description: Trigger Lambda when a new object is added to the S3 bucket
+      EventPattern:
+        source:
+          - aws.s3
+        detail-type:
+          - Object Created
+        detail:
+          bucket:
+            name:
+              - !Ref BucketName
+      Targets:
+        - Arn: !GetAtt CloudtrailLogsFilteringFunction.Arn
+          Id: CloudtrailLambdaTarget
+
+  LambdaInvokePermissionEventBridge:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt S3ObjectCreatedRule.Arn
