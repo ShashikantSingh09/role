@@ -12,14 +12,18 @@ firehose_client = boto3.client("firehose")
 STREAM_NAME = os.environ["STREAM_NAME"]
 
 EVENT_NAME_EXCLUDED_LIST = [
-    e.strip() for e in os.environ.get("EVENT_NAME_EXCLUDED_LIST", "").split(",") if e.strip()
+    e.strip()
+    for e in os.environ.get("EVENT_NAME_EXCLUDED_LIST", "").split(",")
+    if e.strip()
 ]
 
 EVENT_ROLE_ARN_EXCLUDED_LIST = [
-    r.strip() for r in os.environ.get("EVENT_ROLE_ARN_EXCLUDED_LIST", "").split(",") if r.strip()
+    r.strip()
+    for r in os.environ.get("EVENT_ROLE_ARN_EXCLUDED_LIST", "").split(",")
+    if r.strip()
 ]
 
-MAX_RECORD_BATCH_SIZE = 1_000_000
+MAX_RECORD_BATCH_SIZE = 1_000_000  # 1 MB
 MAX_RECORD_BATCH_LENGTH = 500
 
 
@@ -35,9 +39,9 @@ def check_event_excluded(event):
     roles = [
         event.get("userIdentity", {}).get("arn"),
         event.get("userIdentity", {})
-            .get("sessionContext", {})
-            .get("sessionIssuer", {})
-            .get("arn"),
+        .get("sessionContext", {})
+        .get("sessionIssuer", {})
+        .get("arn"),
     ]
 
     if isinstance(event.get("resources"), list):
@@ -56,7 +60,8 @@ def check_event_excluded(event):
 
 def send_to_firehose(records):
     """
-    Sends CloudTrail events to Firehose in batches
+    Send records to Firehose and LOG the response.
+    This removes all ambiguity during testing.
     """
     batch = []
     batch_size = 0
@@ -66,17 +71,14 @@ def send_to_firehose(records):
         record_size = sys.getsizeof(serialized)
 
         if record_size > MAX_RECORD_BATCH_SIZE:
-            logger.warning("Single CloudTrail event exceeds Firehose size limit")
+            logger.warning("Single record exceeds Firehose size limit, skipping")
             continue
 
         if (
             batch_size + record_size > MAX_RECORD_BATCH_SIZE
             or len(batch) >= MAX_RECORD_BATCH_LENGTH
         ):
-            firehose_client.put_record_batch(
-                DeliveryStreamName=STREAM_NAME,
-                Records=[{"Data": json.dumps(batch)}],
-            )
+            _flush_batch(batch)
             batch = []
             batch_size = 0
 
@@ -84,15 +86,37 @@ def send_to_firehose(records):
         batch_size += record_size
 
     if batch:
-        firehose_client.put_record_batch(
-            DeliveryStreamName=STREAM_NAME,
-            Records=[{"Data": json.dumps(batch)}],
+        _flush_batch(batch)
+
+
+def _flush_batch(batch):
+    payload = json.dumps(batch)
+
+    logger.info(
+        "Sending %d CloudTrail event(s) to Firehose stream '%s'",
+        len(batch),
+        STREAM_NAME,
+    )
+
+    response = firehose_client.put_record_batch(
+        DeliveryStreamName=STREAM_NAME,
+        Records=[{"Data": payload}],
+    )
+
+    logger.info("Firehose response: %s", json.dumps(response))
+
+    if response.get("FailedPutCount", 0) > 0:
+        logger.error(
+            "Firehose failed to ingest %d record(s)",
+            response["FailedPutCount"],
         )
+    else:
+        logger.info("Firehose accepted all records successfully")
 
 
 def lambda_handler(event, context):
-    logger.info("Received EventBridge event")
-    logger.info("Event: %s", json.dumps(event))
+    logger.info("Lambda invoked")
+    logger.info("Incoming event: %s", json.dumps(event))
 
     if event.get("detail-type") != "AWS API Call via CloudTrail":
         logger.warning("Ignoring non-CloudTrail event")
@@ -100,12 +124,12 @@ def lambda_handler(event, context):
 
     cloudtrail_event = event.get("detail")
     if not isinstance(cloudtrail_event, dict):
-        logger.warning("Malformed CloudTrail detail")
+        logger.warning("Malformed CloudTrail event")
         return {"statusCode": 200, "body": "Malformed CloudTrail event"}
 
     if check_event_excluded(cloudtrail_event):
         logger.info(
-            "Excluded event %s by %s",
+            "Excluded CloudTrail event %s from %s",
             cloudtrail_event.get("eventName"),
             cloudtrail_event.get("eventSource"),
         )
@@ -114,12 +138,12 @@ def lambda_handler(event, context):
     send_to_firehose([cloudtrail_event])
 
     logger.info(
-        "Successfully forwarded event %s from %s",
+        "Successfully processed CloudTrail event %s from %s",
         cloudtrail_event.get("eventName"),
         cloudtrail_event.get("eventSource"),
     )
 
     return {
         "statusCode": 200,
-        "body": "CloudTrail event processed",
+        "body": "CloudTrail event forwarded to Firehose",
     }
