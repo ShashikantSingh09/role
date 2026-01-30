@@ -83,7 +83,107 @@ Resources:
         EndpointConfiguration:
           Name: google-secops-uscompliant
           Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
+        AWSTemplateFormatVersion: '2010-09-09'
+Description: StateRAMP / FedRAMP Firehose to send CloudTrail logs to Google SecOps
+
+Parameters:
+  GoogleSecOpsSecretName:
+    Type: String
+    Default: google-secops-credentials
+    Description: Secrets Manager secret containing endpoint URL and API key
+
+  GoogleSecOpsEndpointUrl:
+    Type: String
+    Default: Secops-endpoint_url
+    Description: Secret key name for Google SecOps endpoint URL
+
+  GoogleSecOpsApiKey:
+    Type: String
+    Default: Secops-api_key
+    Description: Secret key name for Google SecOps API key
+
+  GoogleSecOpsToken:
+    Type: String
+    Default: SecopsToken
+    Description: Secret key name for Google SecOps access token
+
+  FirehoseStreamName:
+    Type: String
+    Default: aws-cloudtrail-uscompliant-logs-to-google-secops
+    Description: StateRAMP / FedRAMP Firehose delivery stream name
+
+  BackupBucketName:
+    Type: String
+    Default: sboxtestbucket
+    Description: S3 bucket for Firehose backup / failed delivery
+
+Resources:
+
+  FirehoseDeliveryRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: cloudtrail-to-google-secops-firehose-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+
+  FirehoseDeliveryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: cloudtrail-to-google-secops-firehose-policy
+      Roles:
+        - !Ref FirehoseDeliveryRole
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action:
+              - s3:AbortMultipartUpload
+              - s3:GetBucketLocation
+              - s3:GetObject
+              - s3:ListBucket
+              - s3:ListBucketMultipartUploads
+              - s3:PutObject
+            Resource:
+              - !Sub arn:aws:s3:::${BackupBucketName}
+              - !Sub arn:aws:s3:::${BackupBucketName}/*
+          - Effect: Allow
+            Action:
+              - logs:PutLogEvents
+            Resource:
+              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${FirehoseStreamName}:*
+
+  CloudTrailStateRAMPFirehose:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    DependsOn: FirehoseDeliveryPolicy
+    Properties:
+      DeliveryStreamName: !Ref FirehoseStreamName
+      DeliveryStreamType: DirectPut
+      HttpEndpointDestinationConfiguration:
+        RoleARN: !GetAtt FirehoseDeliveryRole.Arn
+        EndpointConfiguration:
+          Name: google-secops-uscompliant
+          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
         AccessKey: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsToken}}}'
+        BufferingHints:
+          IntervalInSeconds: 300
+          SizeInMBs: 64
+        RetryOptions:
+          DurationInSeconds: 300
+        S3BackupMode: FailedDataOnly
+        S3Configuration:
+          RoleARN: !GetAtt FirehoseDeliveryRole.Arn
+          BucketARN: !Sub arn:aws:s3:::${BackupBucketName}
+          CompressionFormat: GZIP
+
+Outputs:
+  FirehoseName:
+    Description: StateRAMP / FedRAMP Firehose Stream Name
+    Value: !Ref CloudTrailStateRAMPFirehose
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
