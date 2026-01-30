@@ -27,7 +27,7 @@ Resources:
   FirehoseDeliveryRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: cloudtrail-to-google-secops-firehose-role
+      RoleName: cloudtrail-to-google-secops-firehose-stateramp-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -39,7 +39,7 @@ Resources:
   FirehoseDeliveryPolicy:
     Type: AWS::IAM::ManagedPolicy
     Properties:
-      ManagedPolicyName: cloudtrail-to-google-secops-firehose-policy
+      ManagedPolicyName: cloudtrail-to-google-secops-firehose-stateramp-policy
       Roles:
         - !Ref FirehoseDeliveryRole
       PolicyDocument:
