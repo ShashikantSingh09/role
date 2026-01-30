@@ -17,6 +17,11 @@ Parameters:
     Default: Secops-api_key
     Description: Secret key name for Google SecOps API key
 
+  GoogleSecOpsToken:
+    Type: String
+    Default: SecopsToken
+    Description: Secret key name for Google SecOps access token
+
   FirehoseStreamName:
     Type: String
     Default: aws-cloudtrail-uscompliant-logs-to-google-secops
@@ -69,19 +74,22 @@ Resources:
 
   CloudTrailStateRAMPFirehose:
     Type: AWS::KinesisFirehose::DeliveryStream
+    DependsOn: FirehoseDeliveryPolicy
     Properties:
       DeliveryStreamName: !Ref FirehoseStreamName
       DeliveryStreamType: DirectPut
       HttpEndpointDestinationConfiguration:
+        RoleARN: !GetAtt FirehoseDeliveryRole.Arn
         EndpointConfiguration:
           Name: google-secops-uscompliant
           Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
         AccessKey: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${SecopsToken}}}'
         BufferingHints:
           IntervalInSeconds: 300
-          SizeInMBs: 100
+          SizeInMBs: 64
         RetryOptions:
           DurationInSeconds: 300
+        S3BackupMode: FailedDataOnly
         S3Configuration:
           RoleARN: !GetAtt FirehoseDeliveryRole.Arn
           BucketARN: !Sub arn:aws:s3:::${BackupBucketName}
