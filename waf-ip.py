@@ -1,149 +1,156 @@
+import gzip
 import json
 import logging
 import os
 import sys
 import boto3
+import re
 
 logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+ssm = boto3.client('ssm')
 
-firehose_client = boto3.client("firehose")
+# Initialize the SQS client
+sqs_client = boto3.client('sqs')
 
-STREAM_NAME = os.environ["STREAM_NAME"]
+# Destination SQS queue URL
+DEST_QUEUE_URL = os.environ["COM_SQS_URL"]
 
-EVENT_NAME_EXCLUDED_LIST = [
-    e.strip()
-    for e in os.environ.get("EVENT_NAME_EXCLUDED_LIST", "").split(",")
-    if e.strip()
-]
+# Predefined list of account numbers to exclude Ensure no white spaces. List is for Stateramp/Fedramp Accounts
+EXCLUDED_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
 
-EVENT_ROLE_ARN_EXCLUDED_LIST = [
-    r.strip()
-    for r in os.environ.get("EVENT_ROLE_ARN_EXCLUDED_LIST", "").split(",")
-    if r.strip()
-]
+# Regular expression to match an AWS account number
+ACCOUNT_NUMBER_REGEX = r"(?<!\d)\d{12}(?!\d)"
 
-MAX_RECORD_BATCH_SIZE = 1_000_000  # 1 MB
-MAX_RECORD_BATCH_LENGTH = 500
+EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
+EVENT_ROLE_ARN_EXCLUDED_LIST = list(os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(","))
 
+MAX_RECORD_BATCH_SIZE = 1000000
+MAX_RECORD_BATCH_LENGHT = 500
 
-def check_event_excluded(event):
-    """
-    Exclude events based on:
-    - eventName
-    - role ARN suffix match
-    """
-    if event.get("eventName") not in EVENT_NAME_EXCLUDED_LIST:
+def check_check_compliant_account(key):
+
+    EVENT_ACCOUNT_FEDGOV_LIST = EXCLUDED_ACCOUNT_NUMBERS
+    
+    # Check if any element in the list is in the key
+    if any(element in key for element in EVENT_ACCOUNT_FEDGOV_LIST):
+        return True
+    else:
         return False
 
-    roles = [
-        event.get("userIdentity", {}).get("arn"),
-        event.get("userIdentity", {})
-        .get("sessionContext", {})
-        .get("sessionIssuer", {})
-        .get("arn"),
-    ]
-
-    if isinstance(event.get("resources"), list):
-        for r in event["resources"]:
-            if isinstance(r, dict) and "ARN" in r:
-                roles.append(r["ARN"])
-
-    for role in roles:
-        if isinstance(role, str):
-            for excluded in EVENT_ROLE_ARN_EXCLUDED_LIST:
-                if role.endswith(excluded):
-                    return True
-
+def check_event_excluded(data):
+    roles_list = []
+    if data.get("eventName") in EVENT_NAME_EXCLUDED_LIST:
+        roles_list.append(data.get('userIdentity', {}).get('sessionContext', {}).get('sessionIssuer', {}).get('arn'))
+        roles_list.append(data.get('userIdentity', {}).get('arn'))
+        if isinstance(data.get('resources'), list):
+            for i in data.get('resources'):
+                if isinstance(i, dict) and "ARN" in i:
+                    roles_list.append(i.get("ARN"))
+        for i in roles_list:
+            if isinstance(i, str):
+                for j in EVENT_ROLE_ARN_EXCLUDED_LIST:
+                    if i.endswith(j):
+                        return True
     return False
 
+def parse_gzip_log_file(s3, key, bucket):
+    response = s3.get_object(Bucket=bucket, Key=key)
+    with gzip.GzipFile(fileobj=response.get("Body")) as file:
+        return json.loads(file.read().decode("UTF-8"))
 
-def send_to_firehose(records):
-    """
-    Send records to Firehose and LOG the response.
-    This removes all ambiguity during testing.
-    """
-    batch = []
-    batch_size = 0
 
-    for record in records:
-        serialized = json.dumps(record)
-        record_size = sys.getsizeof(serialized)
-
-        if record_size > MAX_RECORD_BATCH_SIZE:
-            logger.warning("Single record exceeds Firehose size limit, skipping")
+def filter_cloudtrail_events(data):
+    tmp = []
+    results = []
+    if "Records" not in data:
+        return results
+    for i in data.get("Records"):
+        if sys.getsizeof(i) > MAX_RECORD_BATCH_SIZE:
+            logger.warning("The size of single record is greater than 1,000 KiB")
             continue
+        if not check_event_excluded(i):
+            # The maximum size of a record sent to Kinesis Data Firehose, before base64-encoding, is 1,000 KiB.
+            data = json.dumps((tmp + [i]))
+            if sys.getsizeof(data) > MAX_RECORD_BATCH_SIZE:
+                results.append(json.dumps(tmp))
+                tmp = [i]
+            else:
+                tmp.append(i)
+        if len(tmp) == MAX_RECORD_BATCH_LENGHT:
+            results.append(json.dumps(tmp))
+            tmp = []
+    if tmp:
+        results.append(json.dumps(tmp))
+    return results
 
-        if (
-            batch_size + record_size > MAX_RECORD_BATCH_SIZE
-            or len(batch) >= MAX_RECORD_BATCH_LENGTH
-        ):
-            _flush_batch(batch)
-            batch = []
-            batch_size = 0
 
-        batch.append(record)
-        batch_size += record_size
-
-    if batch:
-        _flush_batch(batch)
-
-
-def _flush_batch(batch):
-    payload = json.dumps(batch)
-
-    logger.info(
-        "Sending %d CloudTrail event(s) to Firehose stream '%s'",
-        len(batch),
-        STREAM_NAME,
-    )
-
-    response = firehose_client.put_record_batch(
-        DeliveryStreamName=STREAM_NAME,
-        Records=[{"Data": payload}],
-    )
-
-    logger.info("Firehose response: %s", json.dumps(response))
-
-    if response.get("FailedPutCount", 0) > 0:
-        logger.error(
-            "Firehose failed to ingest %d record(s)",
-            response["FailedPutCount"],
+def send_logs_to_firehose(data, firehose_client, stream_name):
+    for i in data:
+        response = firehose_client.put_record_batch(
+            DeliveryStreamName=stream_name,
+            Records=[
+                {
+                    'Data': i
+                },
+            ]
         )
-    else:
-        logger.info("Firehose accepted all records successfully")
 
+def extract_account_number(object_key):
+    """Extracts the AWS account number from the object key using regex."""
+    match = re.search(ACCOUNT_NUMBER_REGEX, object_key)
+    if match:
+        return match.group(0)  # Return the matched account number
+    return None
+
+def publish_to_sqs(queue_url, message_body):
+    try:
+        # Send the raw message body as JSON
+        response = sqs_client.send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps(message_body)
+        )
+        print(f"Message published to {queue_url}: {response['MessageId']}")
+    except Exception as e:
+        print(f"Error publishing message to SQS: {e}")
 
 def lambda_handler(event, context):
-    logger.info("Lambda invoked")
-    logger.info("Incoming event: %s", json.dumps(event))
+    logger.info("Starting processing cloudtrail logs")
+    try:
+        s3 = boto3.client('s3', region_name=os.environ["REGION_NAME"])
+        firehose = boto3.client('firehose')
+        bucket = event.get("Records")[0].get("s3").get("bucket").get("name")
+        key = event.get("Records")[0].get("s3").get("object").get("key")
+        content = parse_gzip_log_file(s3=s3, key=key, bucket=bucket)
+        if not content and not isinstance(content, dict):
+            raise Exception("Cannot unpack cloudtrail logs")
+        data = filter_cloudtrail_events(data=content)
+        if data:
+            if check_check_compliant_account(key):
+                send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["US_COMPLIANT_STREAM_NAME"])
+                logger.info("FEDRAMP/GOVCLOUD Cloudtrail logs successfully processed")
+                # Send raw unfiltered content to Google SecOps for StateRAMP/FedRAMP
+                firehose.put_record(
+                    DeliveryStreamName="Google-SecOps-Cloudtrail-StateRAMP-Put",
+                    Record={'Data': json.dumps(content)}
+                )
+                logger.info("StateRAMP/FedRAMP Cloudtrail logs successfully forwarded to Google SecOps")
+            else:
+                send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["STREAM_NAME"])
+                logger.info("Cloudtrail logs successfully processed")
+                # Send raw unfiltered content directly to Google SecOps
+                firehose.put_record(
+                    DeliveryStreamName="Google-SecOps-Cloudtrail-Put",
+                    Record={'Data': json.dumps(content)}
+                )
+                logger.info("Cloudtrail logs successfully forwarded to Google SecOps")
+        else:
+            logger.warning("No records to process")
+    except Exception as error:
+        logger.exception(error)
+    
 
-    if event.get("detail-type") != "AWS API Call via CloudTrail":
-        logger.warning("Ignoring non-CloudTrail event")
-        return {"statusCode": 200, "body": "Ignored non-CloudTrail event"}
-
-    cloudtrail_event = event.get("detail")
-    if not isinstance(cloudtrail_event, dict):
-        logger.warning("Malformed CloudTrail event")
-        return {"statusCode": 200, "body": "Malformed CloudTrail event"}
-
-    if check_event_excluded(cloudtrail_event):
-        logger.info(
-            "Excluded CloudTrail event %s from %s",
-            cloudtrail_event.get("eventName"),
-            cloudtrail_event.get("eventSource"),
-        )
-        return {"statusCode": 200, "body": "Event excluded"}
-
-    send_to_firehose([cloudtrail_event])
-
-    logger.info(
-        "Successfully processed CloudTrail event %s from %s",
-        cloudtrail_event.get("eventName"),
-        cloudtrail_event.get("eventSource"),
-    )
-
+    
     return {
-        "statusCode": 200,
-        "body": "CloudTrail event forwarded to Firehose",
+        'statusCode': 200,
+        'body': 'Processing complete'
     }
