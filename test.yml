@@ -4,7 +4,7 @@ Description: StateRAMP / FedRAMP Firehose to send CloudTrail logs to Google SecO
 Parameters:
   GoogleSecOpsEndpointUrl:
     Type: String
-    Description: Google SecOps endpoint URL (e.g., https://malachiteingestion-pa.googleapis.com/v2/unstructuredlogentries:batchCreate)
+    Description: Google SecOps endpoint URL
     NoEcho: true
   GoogleSecOpsApiKey:
     Type: String
