@@ -77,7 +77,7 @@ Resources:
         EndpointConfiguration:
           Name: google-secops-uscompliant
           Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
-        AccessKey: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsToken}}}'
+          AccessKey: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsToken}}}'
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
