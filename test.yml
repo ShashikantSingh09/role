@@ -16,7 +16,7 @@ Parameters:
     NoEcho: true
   FirehoseStreamName:
     Type: String
-    Default: aws-cloudtrail-uscompliant-logs-to-google-secops
+    Default: Google-SecOps-Cloudtrail-StateRAMP-Put
     Description: StateRAMP / FedRAMP Firehose delivery stream name
   BackupBucketName:
     Type: String
