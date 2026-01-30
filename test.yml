@@ -2,50 +2,28 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: StateRAMP / FedRAMP Firehose to send CloudTrail logs to Google SecOps
 
 Parameters:
-  GoogleSecOpsSecretName:
-    Type: String
-    Default: google-secops-credentials
-    Description: Secrets Manager secret containing endpoint URL and API key
   GoogleSecOpsEndpointUrl:
     Type: String
-    Default: Secops-endpoint_url
-    Description: Secret key name for Google SecOps endpoint URL
+    Description: Google SecOps endpoint URL (e.g., https://malachiteingestion-pa.googleapis.com/v2/unstructuredlogentries:batchCreate)
+    NoEcho: true
   GoogleSecOpsApiKey:
     Type: String
-    Default: Secops-api_key
-    Description: Secret key name for Google SecOps API key
-  GoogleSecOpsToken:
+    Description: Google SecOps API key
+    NoEcho: true
+  GoogleSecOpsAccessKey:
     Type: String
-    Default: SecopsToken
-    Description: Secret key name for Google SecOps access token
+    Description: Google SecOps access token
+    NoEcho: true
   FirehoseStreamName:
     Type: String
     Default: aws-cloudtrail-uscompliant-logs-to-google-secops
     Description: StateRAMP / FedRAMP Firehose delivery stream name
   BackupBucketName:
     Type: String
-    Default: sboxtestbucket
+    Default: 756875170482-google-secops-cloudtrail
     Description: S3 bucket for Firehose backup / failed delivery
 
 Resources:
-  FirehoseLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/kinesisfirehose/${FirehoseStreamName}
-      RetentionInDays: 30
-
-  FirehoseLogStreamHttp:
-    Type: AWS::Logs::LogStream
-    Properties:
-      LogGroupName: !Ref FirehoseLogGroup
-      LogStreamName: HttpEndpointDelivery
-
-  FirehoseLogStreamS3:
-    Type: AWS::Logs::LogStream
-    Properties:
-      LogGroupName: !Ref FirehoseLogGroup
-      LogStreamName: S3BackupDelivery
-
   FirehoseDeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -81,16 +59,12 @@ Resources:
           - Effect: Allow
             Action:
               - logs:PutLogEvents
-              - logs:CreateLogStream
             Resource:
-              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${FirehoseStreamName}:*
+              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${FirehoseStreamName}:*
 
   CloudTrailStateRAMPFirehose:
     Type: AWS::KinesisFirehose::DeliveryStream
-    DependsOn:
-      - FirehoseDeliveryPolicy
-      - FirehoseLogStreamHttp
-      - FirehoseLogStreamS3
+    DependsOn: FirehoseDeliveryPolicy
     Properties:
       DeliveryStreamName: !Ref FirehoseStreamName
       DeliveryStreamType: DirectPut
@@ -98,31 +72,20 @@ Resources:
         RoleARN: !GetAtt FirehoseDeliveryRole.Arn
         EndpointConfiguration:
           Name: google-secops-uscompliant
-          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
-          AccessKey: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsToken}}}'
+          Url: !Sub '${GoogleSecOpsEndpointUrl}?key=${GoogleSecOpsApiKey}'
+          AccessKey: !Ref GoogleSecOpsAccessKey
         BufferingHints:
           IntervalInSeconds: 300
           SizeInMBs: 64
         RetryOptions:
           DurationInSeconds: 300
-        CloudWatchLoggingOptions:
-          Enabled: true
-          LogGroupName: !Ref FirehoseLogGroup
-          LogStreamName: HttpEndpointDelivery
         S3BackupMode: FailedDataOnly
         S3Configuration:
           RoleARN: !GetAtt FirehoseDeliveryRole.Arn
           BucketARN: !Sub arn:aws:s3:::${BackupBucketName}
           CompressionFormat: GZIP
-          CloudWatchLoggingOptions:
-            Enabled: true
-            LogGroupName: !Ref FirehoseLogGroup
-            LogStreamName: S3BackupDelivery
 
 Outputs:
   FirehoseName:
     Description: StateRAMP / FedRAMP Firehose Stream Name
     Value: !Ref CloudTrailStateRAMPFirehose
-  FirehoseLogGroup:
-    Description: CloudWatch Log Group for Firehose errors
-    Value: !Ref FirehoseLogGroup
