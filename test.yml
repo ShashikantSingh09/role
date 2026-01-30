@@ -29,7 +29,7 @@ Parameters:
 
   BackupBucketName:
     Type: String
-    Default: jamf-global-cloudtrail-logs
+    Default: sboxtestbucket
     Description: S3 bucket for Firehose backup / failed delivery
 
 Resources:
