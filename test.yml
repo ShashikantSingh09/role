@@ -24,6 +24,24 @@ Parameters:
     Description: S3 bucket for Firehose backup / failed delivery
 
 Resources:
+  FirehoseLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/kinesisfirehose/${FirehoseStreamName}
+      RetentionInDays: 30
+
+  FirehoseLogStreamHttp:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: HttpEndpointDelivery
+
+  FirehoseLogStreamS3:
+    Type: AWS::Logs::LogStream
+    Properties:
+      LogGroupName: !Ref FirehoseLogGroup
+      LogStreamName: S3BackupDelivery
+
   FirehoseDeliveryRole:
     Type: AWS::IAM::Role
     Properties:
@@ -59,12 +77,16 @@ Resources:
           - Effect: Allow
             Action:
               - logs:PutLogEvents
+              - logs:CreateLogStream
             Resource:
-              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${FirehoseStreamName}:*
+              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${FirehoseStreamName}:*
 
   CloudTrailStateRAMPFirehose:
     Type: AWS::KinesisFirehose::DeliveryStream
-    DependsOn: FirehoseDeliveryPolicy
+    DependsOn:
+      - FirehoseDeliveryPolicy
+      - FirehoseLogStreamHttp
+      - FirehoseLogStreamS3
     Properties:
       DeliveryStreamName: !Ref FirehoseStreamName
       DeliveryStreamType: DirectPut
@@ -79,13 +101,24 @@ Resources:
           SizeInMBs: 64
         RetryOptions:
           DurationInSeconds: 300
+        CloudWatchLoggingOptions:
+          Enabled: true
+          LogGroupName: !Ref FirehoseLogGroup
+          LogStreamName: HttpEndpointDelivery
         S3BackupMode: FailedDataOnly
         S3Configuration:
           RoleARN: !GetAtt FirehoseDeliveryRole.Arn
           BucketARN: !Sub arn:aws:s3:::${BackupBucketName}
           CompressionFormat: GZIP
+          CloudWatchLoggingOptions:
+            Enabled: true
+            LogGroupName: !Ref FirehoseLogGroup
+            LogStreamName: S3BackupDelivery
 
 Outputs:
   FirehoseName:
     Description: StateRAMP / FedRAMP Firehose Stream Name
     Value: !Ref CloudTrailStateRAMPFirehose
+  FirehoseLogGroup:
+    Description: CloudWatch Log Group for Firehose errors
+    Value: !Ref FirehoseLogGroup
