@@ -7,19 +7,9 @@ import boto3
 import re
 
 logger = logging.getLogger()
-ssm = boto3.client('ssm')
 
-# Initialize the SQS client
-sqs_client = boto3.client('sqs')
-
-# Destination SQS queue URL
-DEST_QUEUE_URL = os.environ["COM_SQS_URL"]
-
-# Predefined list of account numbers to exclude Ensure no white spaces. List is for Stateramp/Fedramp Accounts
+# Predefined list of account numbers to exclude Ensure no white spaces. List is for Fedramp Accounts
 EXCLUDED_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
-
-# Regular expression to match an AWS account number
-ACCOUNT_NUMBER_REGEX = r"(?<!\d)\d{12}(?!\d)"
 
 EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
 EVENT_ROLE_ARN_EXCLUDED_LIST = list(os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(","))
@@ -95,24 +85,6 @@ def send_logs_to_firehose(data, firehose_client, stream_name):
             ]
         )
 
-def extract_account_number(object_key):
-    """Extracts the AWS account number from the object key using regex."""
-    match = re.search(ACCOUNT_NUMBER_REGEX, object_key)
-    if match:
-        return match.group(0)  # Return the matched account number
-    return None
-
-def publish_to_sqs(queue_url, message_body):
-    try:
-        # Send the raw message body as JSON
-        response = sqs_client.send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps(message_body)
-        )
-        print(f"Message published to {queue_url}: {response['MessageId']}")
-    except Exception as e:
-        print(f"Error publishing message to SQS: {e}")
-
 def lambda_handler(event, context):
     logger.info("Starting processing cloudtrail logs")
     try:
@@ -128,12 +100,12 @@ def lambda_handler(event, context):
             if check_check_compliant_account(key):
                 send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["US_COMPLIANT_STREAM_NAME"])
                 logger.info("FEDRAMP/GOVCLOUD Cloudtrail logs successfully processed")
-                # Send raw unfiltered content to Google SecOps for StateRAMP/FedRAMP
+                # Send raw unfiltered content to Google SecOps for FedRAMP
                 firehose.put_record(
-                    DeliveryStreamName="Google-SecOps-Cloudtrail-StateRAMP-Put",
+                    DeliveryStreamName="Google-SecOps-Cloudtrail-Compliant-Put",
                     Record={'Data': json.dumps(content)}
                 )
-                logger.info("StateRAMP/FedRAMP Cloudtrail logs successfully forwarded to Google SecOps")
+                logger.info("FedRAMP Cloudtrail logs successfully forwarded to Google SecOps")
             else:
                 send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["STREAM_NAME"])
                 logger.info("Cloudtrail logs successfully processed")
