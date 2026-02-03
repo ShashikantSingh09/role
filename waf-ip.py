@@ -4,11 +4,10 @@ import logging
 import os
 import sys
 import boto3
-import re
 
 logger = logging.getLogger()
 
-# Predefined list of account numbers to exclude Ensure no white spaces. List is for Fedramp Accounts
+# Predefined list of account numbers to exclude. Ensure no white spaces. List is for Fedramp Accounts
 EXCLUDED_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
 
 EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
@@ -102,10 +101,10 @@ def lambda_handler(event, context):
                 logger.info("FEDRAMP/GOVCLOUD Cloudtrail logs successfully processed")
                 # Send raw unfiltered content to Google SecOps for FedRAMP
                 firehose.put_record(
-                    DeliveryStreamName="Google-SecOps-Cloudtrail-Compliant-Put",
+                    DeliveryStreamName="Google-SecOps-Cloudtrail-High-Compliant-Put",
                     Record={'Data': json.dumps(content)}
                 )
-                logger.info("FedRAMP Cloudtrail logs successfully forwarded to Google SecOps")
+                logger.info("High Compliant Cloudtrail logs successfully forwarded to Google SecOps")
             else:
                 send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["STREAM_NAME"])
                 logger.info("Cloudtrail logs successfully processed")
@@ -120,9 +119,8 @@ def lambda_handler(event, context):
     except Exception as error:
         logger.exception(error)
     
-
-    
     return {
         'statusCode': 200,
         'body': 'Processing complete'
     }
+
