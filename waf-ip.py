@@ -7,26 +7,20 @@ import boto3
 
 logger = logging.getLogger()
 
-# Predefined list of account numbers to exclude. Ensure no white spaces. List is for Fedramp Accounts
-EXCLUDED_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
-
+COMPLIANT_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
 EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
 EVENT_ROLE_ARN_EXCLUDED_LIST = list(os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(","))
 
-MAX_RECORD_BATCH_SIZE = 1000000
-MAX_RECORD_BATCH_LENGHT = 500
+MAX_RECORD_SIZE = 1000000
 
-def check_check_compliant_account(key):
 
-    EVENT_ACCOUNT_FEDGOV_LIST = EXCLUDED_ACCOUNT_NUMBERS
-    
-    # Check if any element in the list is in the key
-    if any(element in key for element in EVENT_ACCOUNT_FEDGOV_LIST):
-        return True
-    else:
-        return False
+def check_compliant_account(key):
+    """Check if the S3 key contains a compliant account number"""
+    return any(account in key for account in COMPLIANT_ACCOUNT_NUMBERS)
+
 
 def check_event_excluded(data):
+    """Check if event should be excluded based on event name and role ARN"""
     roles_list = []
     if data.get("eventName") in EVENT_NAME_EXCLUDED_LIST:
         roles_list.append(data.get('userIdentity', {}).get('sessionContext', {}).get('sessionIssuer', {}).get('arn'))
@@ -42,80 +36,64 @@ def check_event_excluded(data):
                         return True
     return False
 
+
+def filter_cloudtrail_events(data):
+    """Filter CloudTrail events and remove excluded events"""
+    filtered_records = []
+    if "Records" not in data:
+        return filtered_records
+    
+    for record in data.get("Records"):
+        if sys.getsizeof(record) > MAX_RECORD_SIZE:
+            logger.warning("Record size exceeds 1,000 KiB, skipping")
+            continue
+        if not check_event_excluded(record):
+            filtered_records.append(record)
+    
+    return filtered_records
+
+
 def parse_gzip_log_file(s3, key, bucket):
+    """Parse gzipped CloudTrail log file from S3"""
     response = s3.get_object(Bucket=bucket, Key=key)
     with gzip.GzipFile(fileobj=response.get("Body")) as file:
         return json.loads(file.read().decode("UTF-8"))
 
-
-def filter_cloudtrail_events(data):
-    tmp = []
-    results = []
-    if "Records" not in data:
-        return results
-    for i in data.get("Records"):
-        if sys.getsizeof(i) > MAX_RECORD_BATCH_SIZE:
-            logger.warning("The size of single record is greater than 1,000 KiB")
-            continue
-        if not check_event_excluded(i):
-            # The maximum size of a record sent to Kinesis Data Firehose, before base64-encoding, is 1,000 KiB.
-            data = json.dumps((tmp + [i]))
-            if sys.getsizeof(data) > MAX_RECORD_BATCH_SIZE:
-                results.append(json.dumps(tmp))
-                tmp = [i]
-            else:
-                tmp.append(i)
-        if len(tmp) == MAX_RECORD_BATCH_LENGHT:
-            results.append(json.dumps(tmp))
-            tmp = []
-    if tmp:
-        results.append(json.dumps(tmp))
-    return results
-
-
-def send_logs_to_firehose(data, firehose_client, stream_name):
-    for i in data:
-        response = firehose_client.put_record_batch(
-            DeliveryStreamName=stream_name,
-            Records=[
-                {
-                    'Data': i
-                },
-            ]
-        )
 
 def lambda_handler(event, context):
     logger.info("Starting processing cloudtrail logs")
     try:
         s3 = boto3.client('s3', region_name=os.environ["REGION_NAME"])
         firehose = boto3.client('firehose')
+        
         bucket = event.get("Records")[0].get("s3").get("bucket").get("name")
         key = event.get("Records")[0].get("s3").get("object").get("key")
+        
         content = parse_gzip_log_file(s3=s3, key=key, bucket=bucket)
-        if not content and not isinstance(content, dict):
+        
+        if not content or not isinstance(content, dict):
             raise Exception("Cannot unpack cloudtrail logs")
-        data = filter_cloudtrail_events(data=content)
-        if data:
-            if check_check_compliant_account(key):
-                send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["US_COMPLIANT_STREAM_NAME"])
-                logger.info("FEDRAMP/GOVCLOUD Cloudtrail logs successfully processed")
-                # Send raw unfiltered content to Google SecOps for FedRAMP
+        
+        filtered_records = filter_cloudtrail_events(data=content)
+        
+        if filtered_records:
+            filtered_content = {"Records": filtered_records}
+            
+            if check_compliant_account(key):
                 firehose.put_record(
-                    DeliveryStreamName="Google-SecOps-Cloudtrail-High-Compliant-Put",
-                    Record={'Data': json.dumps(content)}
+                    DeliveryStreamName="Google-SecOps-Cloudtrail-Compliant-Put",
+                    Record={'Data': json.dumps(filtered_content)}
                 )
-                logger.info("High Compliant Cloudtrail logs successfully forwarded to Google SecOps")
+                logger.info("Filtered FedRAMP/GovCloud CloudTrail logs sent to Google SecOps")
             else:
-                send_logs_to_firehose(data=data, firehose_client=firehose, stream_name=os.environ["STREAM_NAME"])
-                logger.info("Cloudtrail logs successfully processed")
-                # Send raw unfiltered content directly to Google SecOps
                 firehose.put_record(
                     DeliveryStreamName="Google-SecOps-Cloudtrail-Put",
-                    Record={'Data': json.dumps(content)}
+                    Record={'Data': json.dumps(filtered_content)}
                 )
-                logger.info("Cloudtrail logs successfully forwarded to Google SecOps")
+                logger.info("Filtered CloudTrail logs sent to Google SecOps")
         else:
-            logger.warning("No records to process")
+            logger.warning("No records to process after filtering")
+            
     except Exception as error:
         logger.exception(error)
     
@@ -123,4 +101,3 @@ def lambda_handler(event, context):
         'statusCode': 200,
         'body': 'Processing complete'
     }
-
