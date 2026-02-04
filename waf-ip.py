@@ -96,7 +96,6 @@ def lambda_handler(event, context):
         if not content or not isinstance(content, dict):
             raise Exception("Cannot unpack CloudTrail logs")
         
-        # Returns array of batches: [[batch1_records], [batch2_records], ...]
         batches = filter_cloudtrail_events(data=content)
         
         if batches:
@@ -125,4 +124,5 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': f'Processing failed: {str(error)}'
         }
+
 
