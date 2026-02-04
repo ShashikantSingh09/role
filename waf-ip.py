@@ -60,7 +60,6 @@ def filter_cloudtrail_events(data):
         if check_event_excluded(record):
             continue
         
-        # If adding this record exceeds limit, start new batch
         if current_batch_size + record_size > MAX_RECORD_SIZE and current_batch:
             batches.append(current_batch)
             current_batch = []
@@ -126,3 +125,4 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': f'Processing failed: {str(error)}'
         }
+
