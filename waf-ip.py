@@ -6,12 +6,13 @@ import sys
 import boto3
 
 logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 COMPLIANT_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
 EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
 EVENT_ROLE_ARN_EXCLUDED_LIST = list(os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(","))
 
-MAX_RECORD_SIZE = 1000000
+MAX_RECORD_SIZE = 1000000  # 1MB Firehose limit
 
 
 def check_compliant_account(key):
@@ -38,19 +39,41 @@ def check_event_excluded(data):
 
 
 def filter_cloudtrail_events(data):
-    """Filter CloudTrail events and remove excluded events"""
-    filtered_records = []
+    """Filter CloudTrail events and remove excluded events, returns batched arrays"""
+    batches = []
+    current_batch = []
+    current_batch_size = 0
+    
     if "Records" not in data:
-        return filtered_records
+        return batches
     
     for record in data.get("Records"):
-        if sys.getsizeof(record) > MAX_RECORD_SIZE:
-            logger.warning("Record size exceeds 1,000 KiB, skipping")
+        record_json = json.dumps(record)
+        record_size = len(record_json.encode('utf-8'))
+        
+        # Skip oversized individual records
+        if record_size > MAX_RECORD_SIZE:
+            logger.warning("Record size exceeds 1MB, skipping")
             continue
-        if not check_event_excluded(record):
-            filtered_records.append(record)
+        
+        # Skip excluded events
+        if check_event_excluded(record):
+            continue
+        
+        # If adding this record exceeds limit, start new batch
+        if current_batch_size + record_size > MAX_RECORD_SIZE and current_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_batch_size = 0
+        
+        current_batch.append(record)
+        current_batch_size += record_size
     
-    return filtered_records
+    # Add remaining records
+    if current_batch:
+        batches.append(current_batch)
+    
+    return batches
 
 
 def parse_gzip_log_file(s3, key, bucket):
@@ -61,7 +84,7 @@ def parse_gzip_log_file(s3, key, bucket):
 
 
 def lambda_handler(event, context):
-    logger.info("Starting processing cloudtrail logs")
+    logger.info("Starting processing CloudTrail logs")
     try:
         s3 = boto3.client('s3', region_name=os.environ["REGION_NAME"])
         firehose = boto3.client('firehose')
@@ -72,32 +95,34 @@ def lambda_handler(event, context):
         content = parse_gzip_log_file(s3=s3, key=key, bucket=bucket)
         
         if not content or not isinstance(content, dict):
-            raise Exception("Cannot unpack cloudtrail logs")
+            raise Exception("Cannot unpack CloudTrail logs")
         
-        filtered_records = filter_cloudtrail_events(data=content)
+        # Returns array of batches: [[batch1_records], [batch2_records], ...]
+        batches = filter_cloudtrail_events(data=content)
         
-        if filtered_records:
-            filtered_content = {"Records": filtered_records}
+        if batches:
+            stream_name = "Google-SecOps-Cloudtrail-Compliant-Put" if check_compliant_account(key) else "Google-SecOps-Cloudtrail-Put"
             
-            if check_compliant_account(key):
+            total_records = 0
+            for batch in batches:
                 firehose.put_record(
-                    DeliveryStreamName="Google-SecOps-Cloudtrail-Compliant-Put",
-                    Record={'Data': json.dumps(filtered_content)}
+                    DeliveryStreamName=stream_name,
+                    Record={'Data': json.dumps({"Records": batch})}
                 )
-                logger.info("Filtered FedRAMP/GovCloud CloudTrail logs sent to Google SecOps")
-            else:
-                firehose.put_record(
-                    DeliveryStreamName="Google-SecOps-Cloudtrail-Put",
-                    Record={'Data': json.dumps(filtered_content)}
-                )
-                logger.info("Filtered CloudTrail logs sent to Google SecOps")
+                total_records += len(batch)
+            
+            logger.info(f"Sent {total_records} records in {len(batches)} batches to {stream_name}")
         else:
             logger.warning("No records to process after filtering")
+        
+        return {
+            'statusCode': 200,
+            'body': 'Processing complete'
+        }
             
     except Exception as error:
         logger.exception(error)
-    
-    return {
-        'statusCode': 200,
-        'body': 'Processing complete'
-    }
+        return {
+            'statusCode': 500,
+            'body': f'Processing failed: {str(error)}'
+        }
