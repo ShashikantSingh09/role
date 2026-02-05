@@ -1,171 +1,141 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Transform: AWS::Serverless-2016-10-31
-Description: Trigger Lambda on new S3 objects and forward CloudTrail logs to Google SecOps
+Description: Chronicle CloudTrail ingestion with KMS, EventBridge -> SNS -> SQS
 
 Parameters:
-  GoogleSecOpsSecretName:
+  CloudTrailBucketName:
     Type: String
-    Default: google-secops-credentials
-
-  GoogleSecOpsEndpointUrl:
-    Type: String
-    Default: Secops-endpoint_url
-
-  GoogleSecOpsApiKey:
-    Type: String
-    Default: Secops-api_key
-
-  EventRole:
-    Type: String
-    Default: ExportTaskRole,ExtractRole,Extract-10J5Z8O7JDV9A,EmrFS-Session,Extract-JUKG0T0AARWX,XProtectMRTDynamoDBTableReadOnlyRole,spinnakerManaged-terraform,newrelic-infrastructure
-
-  EventName:
-    Type: String
-    Default: Decrypt,GenerateDataKey,AssumeRole,GetBucketLocation,Encrypt
-
-  StreamName:
-    Type: String
-    Default: aws-cloudtrail-logs-to-google-secops
-
-  BucketName:
-    Type: String
-    Default: jamf-global-cloudtrail-logs
-
-  RegionName:
-    Type: String
-    Default: us-east-1
+    Description: Existing CloudTrail S3 bucket name
 
 Resources:
-
-  DeliveryRole:
-    Type: AWS::IAM::Role
+  ChronicleKMSKey:
+    Type: AWS::KMS::Key
     Properties:
-      RoleName: cloudtrail-to-google-secops-delivery-role
-      AssumeRolePolicyDocument:
+      Description: KMS key for SNS and SQS encryption (scoped access)
+      EnableKeyRotation: true
+      KeyPolicy:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
+          - Sid: RootAccess
+            Effect: Allow
             Principal:
-              Service: firehose.amazonaws.com
-            Action: sts:AssumeRole
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: '*'
 
-  DeliveryPolicy:
-    Type: AWS::IAM::ManagedPolicy
+          - Sid: AllowSNSTopicUse
+            Effect: Allow
+            Principal:
+              Service: sns.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !Ref CloudTrailSNSTopic
+                aws:SourceAccount: !Ref AWS::AccountId
+
+          - Sid: AllowSQSUse
+            Effect: Allow
+            Principal:
+              Service: sqs.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey
+            Resource: '*'
+            Condition:
+              StringEquals:
+                aws:SourceArn: !GetAtt CloudTrailSQSQueue.Arn
+                aws:SourceAccount: !Ref AWS::AccountId
+
+  ChronicleKMSAlias:
+    Type: AWS::KMS::Alias
     Properties:
-      ManagedPolicyName: cloudtrail-to-google-secops-firehose-policy
+      AliasName: alias/chronicle-cloudtrail-key
+      TargetKeyId: !Ref ChronicleKMSKey
+
+  CloudTrailSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: CloudTrail-Notification-Topic
+      KmsMasterKeyId: !Ref ChronicleKMSKey
+
+  SNSTopicPolicy:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref CloudTrailSNSTopic
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
-            Action:
-              - s3:AbortMultipartUpload
-              - s3:GetBucketLocation
-              - s3:GetObject
-              - s3:ListBucket
-              - s3:ListBucketMultipartUploads
-              - s3:PutObject
-            Resource:
-              - !Sub arn:aws:s3:::${BucketName}
-              - !Sub arn:aws:s3:::${BucketName}/*
+          - Sid: AllowEventBridgePublish
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sns:Publish
+            Resource: !Ref CloudTrailSNSTopic
 
-          - Effect: Allow
-            Action:
-              - logs:PutLogEvents
-            Resource:
-              - !Sub arn:aws:logs:*:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
-
-      Roles:
-        - !Ref DeliveryRole
-
-  CloudtrailDeliveryStream:
-    Type: AWS::KinesisFirehose::DeliveryStream
+  CloudTrailSQSQueue:
+    Type: AWS::SQS::Queue
     Properties:
-      DeliveryStreamName: !Ref StreamName
-      DeliveryStreamType: DirectPut
-      HttpEndpointDestinationConfiguration:
-        EndpointConfiguration:
-          Name: google-secops
-          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
-        BufferingHints:
-          IntervalInSeconds: 300
-          SizeInMBs: 64
-        RetryOptions:
-          DurationInSeconds: 300
-        S3Configuration:
-          BucketARN: !Sub arn:aws:s3:::${BucketName}
-          RoleARN: !GetAtt DeliveryRole.Arn
-          CompressionFormat: GZIP
+      QueueName: CloudTrail-Notification-Queue
+      KmsMasterKeyId: !Ref ChronicleKMSKey
+      KmsDataKeyReusePeriodSeconds: 300
 
-  CloudtrailLogsFilteringFunctionRole:
-    Type: AWS::IAM::Role
+  SQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
     Properties:
-      AssumeRolePolicyDocument:
+      Queues:
+        - !Ref CloudTrailSQSQueue
+      PolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
+          - Sid: AllowSNSPublish
+            Effect: Allow
             Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
+              Service: sns.amazonaws.com
+            Action: SQS:SendMessage
+            Resource: !GetAtt CloudTrailSQSQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref CloudTrailSNSTopic
 
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-
-      Policies:
-        - PolicyName: CloudtrailLogsFilteringInlinePolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource:
-                  - !Sub arn:aws:s3:::${BucketName}/*
-
-              - Effect: Allow
-                Action:
-                  - firehose:PutRecordBatch
-                Resource:
-                  - !GetAtt CloudtrailDeliveryStream.Arn
-
-  CloudtrailLogsFilteringFunction:
-    Type: AWS::Serverless::Function
+  SNSSubscription:
+    Type: AWS::SNS::Subscription
     Properties:
-      FunctionName: cloudtrail-logs-filtering
-      Runtime: python3.12
-      Handler: cloudtrail-logs-filtering.lambda_handler
-      CodeUri: .
-      MemorySize: 256
-      Timeout: 500
-      Role: !GetAtt CloudtrailLogsFilteringFunctionRole.Arn
-      Environment:
-        Variables:
-          STREAM_NAME: !Ref StreamName
-          EVENT_NAME_EXCLUDED_LIST: !Ref EventName
-          EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
-          REGION_NAME: !Ref RegionName
+      TopicArn: !Ref CloudTrailSNSTopic
+      Protocol: sqs
+      Endpoint: !GetAtt CloudTrailSQSQueue.Arn
+      RawMessageDelivery: true
 
-  S3ObjectCreatedRule:
+  PutObjectEventRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: s3-object-created-cloudtrail
-      Description: Trigger Lambda when a new object is added to the S3 bucket
+      Name: CloudTrail-S3-PutObject-Notify
       EventPattern:
         source:
           - aws.s3
         detail-type:
-          - Object Created
+          - AWS API Call via CloudTrail
         detail:
-          bucket:
-            name:
-              - !Ref BucketName
+          eventName:
+            - PutObject
+          requestParameters:
+            bucketName:
+              - !Ref CloudTrailBucketName
       Targets:
-        - Arn: !GetAtt CloudtrailLogsFilteringFunction.Arn
-          Id: CloudtrailLambdaTarget
+        - Arn: !Ref CloudTrailSNSTopic
+          Id: SendToSNS
 
-  LambdaInvokePermissionEventBridge:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CloudtrailLogsFilteringFunction.Arn
-      Principal: events.amazonaws.com
-      SourceArn: !GetAtt S3ObjectCreatedRule.Arn
+Outputs:
+  KMSKeyArn:
+    Value: !GetAtt ChronicleKMSKey.Arn
+
+  SNSTopicArn:
+    Value: !Ref CloudTrailSNSTopic
+
+  SQSQueueArn:
+    Value: !GetAtt CloudTrailSQSQueue.Arn
+
+  SQSQueueURL:
+    Value: !Ref CloudTrailSQSQueue
