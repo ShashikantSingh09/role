@@ -1,10 +1,10 @@
 {
-   "source": ["aws.s3"],
-   "detail-type": ["AWS API Call via CloudTrail"],
-   "detail": {
-      "eventName": ["PutObject"],
-      "requestParameters": {
-         "bucketName": [`google-feed-secops-bucket`]
-      }
-   }
+  "source": ["aws.s3"],
+  "detail-type": ["AWS API Call via CloudTrail"],
+  "detail": {
+    "eventName": ["PutObject"],
+    "requestParameters": {
+      "bucketName": ["google-feed-secops-bucket"]
+    }
+  }
 }
