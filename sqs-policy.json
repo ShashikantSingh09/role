@@ -3,6 +3,15 @@
   "Id": "PolicyForSNS",
   "Statement": [
     {
+      "Sid": "OwnerFullAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "841162707314"
+      },
+      "Action": "SQS:*",
+      "Resource": "arn:aws:sqs:us-east-1:841162707314:CloudTrail-Notification-Queue"
+    },
+    {
       "Sid": "AllowSNS",
       "Effect": "Allow",
       "Principal": {
