@@ -88,12 +88,25 @@ Resources:
         - !Ref CloudTrailSQSQueue
       PolicyDocument:
         Version: '2012-10-17'
+        Id: __default_policy_ID
         Statement:
+
+          # --- Account owner full access (sqs:*) ---
+          - Sid: __owner_statement
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action:
+              - sqs:*
+            Resource: !GetAtt CloudTrailSQSQueue.Arn
+
+          # --- Allow SNS topic to send messages ---
           - Sid: AllowSNSPublish
             Effect: Allow
             Principal:
               Service: sns.amazonaws.com
-            Action: sqs:SendMessage
+            Action:
+              - sqs:SendMessage
             Resource: !GetAtt CloudTrailSQSQueue.Arn
             Condition:
               ArnEquals:
