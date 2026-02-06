@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Chronicle CloudTrail ingestion with EventBridge -> SNS -> SQS (no KMS)
+Description: Chronicle CloudTrail ingestion with S3 ->EventBridge -> SNS -> SQS
 
 Parameters:
   CloudTrailBucketName:
