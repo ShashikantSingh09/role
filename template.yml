@@ -1,70 +1,62 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Chronicle CloudTrail ingestion with KMS, EventBridge -> SNS -> SQS
+Description: |
+  Google SecOps CloudTrail Integration. EventBridge rule -> SNS topic -> SQS Standard queue. Assumes existing S3 bucket, CloudTrail trail, and IAM user.
 
 Parameters:
-  CloudTrailBucketName:
+  ExistingS3BucketName:
     Type: String
-    Description: Existing CloudTrail S3 bucket name
+    Description: Name of your existing S3 bucket where CloudTrail logs are stored.
 
 Resources:
-  ChronicleKMSKey:
+  SecOpsKMSKey:
     Type: AWS::KMS::Key
     Properties:
-      Description: KMS key for SNS and SQS encryption (scoped access)
+      Description: KMS key for Google SecOps SNS and SQS encryption.
+      Enabled: true
       EnableKeyRotation: true
       KeyPolicy:
         Version: '2012-10-17'
         Statement:
-          - Sid: RootAccess
+          - Sid: AllowRootFullAccess
             Effect: Allow
             Principal:
               AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
             Action: kms:*
             Resource: '*'
-
-          - Sid: AllowSNSTopicUse
+          - Sid: AllowEventBridge
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action:
+              - kms:GenerateDataKey
+              - kms:Decrypt
+            Resource: '*'
+          - Sid: AllowSNS
             Effect: Allow
             Principal:
               Service: sns.amazonaws.com
             Action:
-              - kms:Decrypt
               - kms:GenerateDataKey
-            Resource: '*'
-            Condition:
-              StringEquals:
-                aws:SourceArn: !Ref CloudTrailSNSTopic
-                aws:SourceAccount: !Ref AWS::AccountId
-
-          - Sid: AllowSQSUse
-            Effect: Allow
-            Principal:
-              Service: sqs.amazonaws.com
-            Action:
               - kms:Decrypt
-              - kms:GenerateDataKey
             Resource: '*'
-            Condition:
-              StringEquals:
-                aws:SourceArn: !GetAtt CloudTrailSQSQueue.Arn
-                aws:SourceAccount: !Ref AWS::AccountId
 
-  ChronicleKMSAlias:
+  SecOpsKMSKeyAlias:
     Type: AWS::KMS::Alias
     Properties:
-      AliasName: alias/chronicle-cloudtrail-key
-      TargetKeyId: !Ref ChronicleKMSKey
+      AliasName: alias/secops-sns-sqs-key
+      TargetKeyId: !Ref SecOpsKMSKey
 
-  CloudTrailSNSTopic:
+  CloudTrailNotificationTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: CloudTrail-Notification-Topic
-      KmsMasterKeyId: !Ref ChronicleKMSKey
+      KmsMasterKeyId: !Ref SecOpsKMSKey
 
-  SNSTopicPolicy:
+  CloudTrailNotificationTopicPolicy:
     Type: AWS::SNS::TopicPolicy
     Properties:
       Topics:
-        - !Ref CloudTrailSNSTopic
+        - !Ref CloudTrailNotificationTopic
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -73,45 +65,50 @@ Resources:
             Principal:
               Service: events.amazonaws.com
             Action: sns:Publish
-            Resource: !Ref CloudTrailSNSTopic
+            Resource: !Ref CloudTrailNotificationTopic
 
-  CloudTrailSQSQueue:
+  CloudTrailNotificationQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: CloudTrail-Notification-Queue
-      KmsMasterKeyId: !Ref ChronicleKMSKey
+      KmsMasterKeyId: !Ref SecOpsKMSKey
       KmsDataKeyReusePeriodSeconds: 300
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 1209600
 
-  SQSQueuePolicy:
+  CloudTrailNotificationQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref CloudTrailSQSQueue
+        - !Ref CloudTrailNotificationQueue
       PolicyDocument:
         Version: '2012-10-17'
+        Id: PolicyForSNS
         Statement:
-          - Sid: AllowSNSPublish
+          - Sid: AllowSNS
             Effect: Allow
             Principal:
               Service: sns.amazonaws.com
-            Action: SQS:SendMessage
-            Resource: !GetAtt CloudTrailSQSQueue.Arn
+            Action: sqs:SendMessage
+            Resource: !GetAtt CloudTrailNotificationQueue.Arn
             Condition:
               ArnEquals:
-                aws:SourceArn: !Ref CloudTrailSNSTopic
+                aws:SourceArn: !Ref CloudTrailNotificationTopic
 
-  SNSSubscription:
+  SNSToSQSSubscription:
     Type: AWS::SNS::Subscription
     Properties:
-      TopicArn: !Ref CloudTrailSNSTopic
+      TopicArn: !Ref CloudTrailNotificationTopic
       Protocol: sqs
-      Endpoint: !GetAtt CloudTrailSQSQueue.Arn
+      Endpoint: !GetAtt CloudTrailNotificationQueue.Arn
       RawMessageDelivery: true
 
-  PutObjectEventRule:
+  CloudTrailPutObjectRule:
     Type: AWS::Events::Rule
     Properties:
-      Name: CloudTrail-S3-PutObject-Notify
+      Name: cloudtrail-s3-putobject-secops
+      Description: Detects PutObject on CloudTrail S3 bucket, forwards to SNS.
+      State: ENABLED
       EventPattern:
         source:
           - aws.s3
@@ -122,20 +119,28 @@ Resources:
             - PutObject
           requestParameters:
             bucketName:
-              - !Ref CloudTrailBucketName
+              - !Ref ExistingS3BucketName
       Targets:
-        - Arn: !Ref CloudTrailSNSTopic
-          Id: SendToSNS
+        - Id: CloudTrailSNSTarget
+          Arn: !Ref CloudTrailNotificationTopic
 
 Outputs:
   KMSKeyArn:
-    Value: !GetAtt ChronicleKMSKey.Arn
+    Description: KMS Key ARN used for SNS and SQS encryption.
+    Value: !GetAtt SecOpsKMSKey.Arn
+
+  KMSKeyAlias:
+    Description: KMS Key alias.
+    Value: alias/secops-sns-sqs-key
 
   SNSTopicArn:
-    Value: !Ref CloudTrailSNSTopic
-
-  SQSQueueArn:
-    Value: !GetAtt CloudTrailSQSQueue.Arn
+    Description: SNS Topic ARN.
+    Value: !Ref CloudTrailNotificationTopic
 
   SQSQueueURL:
-    Value: !Ref CloudTrailSQSQueue
+    Description: SQS Queue URL for Google SecOps feed configuration.
+    Value: !Ref CloudTrailNotificationQueue
+
+  SQSQueueArn:
+    Description: SQS Queue ARN.
+    Value: !GetAtt CloudTrailNotificationQueue.Arn
