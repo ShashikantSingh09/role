@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Chronicle CloudTrail ingestion with S3 ->EventBridge -> SNS -> SQS
+Description: Chronicle CloudTrail ingestion with EventBridge -> SNS -> SQS
 
 Parameters:
   CloudTrailBucketName:
     Type: String
+    Default: google-feed-secops-bucket
     Description: Existing CloudTrail S3 bucket name
 
 Resources:
