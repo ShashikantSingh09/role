@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Chronicle CloudTrail ingestion with KMS, EventBridge -> SNS -> SQS
+Description: Chronicle CloudTrail ingestion with EventBridge -> SNS -> SQS (no KMS)
 
 Parameters:
   CloudTrailBucketName:
@@ -8,56 +8,10 @@ Parameters:
 
 Resources:
 
-  ChronicleKMSKey:
-    Type: AWS::KMS::Key
-    Properties:
-      Description: KMS key for SNS and SQS encryption
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: RootAccess
-            Effect: Allow
-            Principal:
-              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
-            Action: kms:*
-            Resource: '*'
-
-          - Sid: AllowSNSEncryption
-            Effect: Allow
-            Principal:
-              Service: sns.amazonaws.com
-            Action:
-              - kms:GenerateDataKey
-              - kms:Decrypt
-            Resource: '*'
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-
-          - Sid: AllowSQSEncryption
-            Effect: Allow
-            Principal:
-              Service: sqs.amazonaws.com
-            Action:
-              - kms:GenerateDataKey
-              - kms:Decrypt
-            Resource: '*'
-            Condition:
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-
-  ChronicleKMSAlias:
-    Type: AWS::KMS::Alias
-    Properties:
-      AliasName: alias/chronicle-cloudtrail-key
-      TargetKeyId: !Ref ChronicleKMSKey
-
   CloudTrailSNSTopic:
     Type: AWS::SNS::Topic
     Properties:
       TopicName: CloudTrail-Notification-Topic
-      KmsMasterKeyId: !Ref ChronicleKMSKey
 
   SNSTopicPolicy:
     Type: AWS::SNS::TopicPolicy
@@ -71,15 +25,16 @@ Resources:
             Effect: Allow
             Principal:
               Service: events.amazonaws.com
-            Action: sns:Publish
+            Action:
+              - sns:Publish
             Resource: !Ref CloudTrailSNSTopic
 
   CloudTrailSQSQueue:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: CloudTrail-Notification-Queue
-      KmsMasterKeyId: !Ref ChronicleKMSKey
-      KmsDataKeyReusePeriodSeconds: 300
+      VisibilityTimeout: 30 # optional
+      MessageRetentionPeriod: 345600 # optional (4 days)
 
   SQSQueuePolicy:
     Type: AWS::SQS::QueuePolicy
@@ -137,9 +92,6 @@ Resources:
           Id: SendToSNS
 
 Outputs:
-  KMSKeyArn:
-    Value: !GetAtt ChronicleKMSKey.Arn
-
   SNSTopicArn:
     Value: !Ref CloudTrailSNSTopic
 
