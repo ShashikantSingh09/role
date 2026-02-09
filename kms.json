@@ -3,7 +3,7 @@
   "Id": "key-consolepolicy-3",
   "Statement": [
     {
-      "Sid": "Enable IAM User Permissions",
+      "Sid": "EnableRootPermissions",
       "Effect": "Allow",
       "Principal": {
         "AWS": "arn:aws:iam::841162707314:root"
@@ -12,22 +12,29 @@
       "Resource": "*"
     },
     {
-      "Sid": "Allow GuardDuty to encrypt findings",
+      "Sid": "AllowGuardDutyToUseKeyForExport",
       "Effect": "Allow",
       "Principal": {
         "Service": "guardduty.amazonaws.com"
       },
-      "Action": "kms:GenerateDataKey",
+      "Action": [
+        "kms:GenerateDataKey",
+        "kms:Encrypt",
+        "kms:Decrypt",
+        "kms:DescribeKey"
+      ],
       "Resource": "*",
       "Condition": {
         "StringEquals": {
-          "aws:SourceAccount": "841162707314",
-          "aws:SourceArn": "arn:aws:guardduty:us-east-1:841162707314:detector/16c8ac07eaa8541c1c49a9baf04079bb"
+          "aws:SourceAccount": "841162707314"
+        },
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:guardduty:us-east-1:841162707314:detector/*"
         }
       }
     },
     {
-      "Sid": "Allow access for Key Administrators",
+      "Sid": "AllowKeyAdministration",
       "Effect": "Allow",
       "Principal": {
         "AWS": "arn:aws:iam::841162707314:user/Ateh"
