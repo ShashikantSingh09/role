@@ -11,7 +11,7 @@
       "Resource": "arn:aws:s3:::756875170482-google-secops-cloudtrail"
     },
     {
-      "Sid": "AllowOrgCloudTrailWrite",
+      "Sid": "CloudTrailWrite",
       "Effect": "Allow",
       "Principal": {
         "Service": "cloudtrail.amazonaws.com"
@@ -20,8 +20,10 @@
       "Resource": "arn:aws:s3:::756875170482-google-secops-cloudtrail/AWSLogs/*",
       "Condition": {
         "StringEquals": {
-          "s3:x-amz-acl": "bucket-owner-full-control",
-          "aws:PrincipalOrgID": "o-bk33g55csx"
+          "s3:x-amz-acl": "bucket-owner-full-control"
+        },
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:cloudtrail:*:*:trail/*"
         }
       }
     }
