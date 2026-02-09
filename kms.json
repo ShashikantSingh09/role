@@ -19,9 +19,7 @@
       },
       "Action": [
         "kms:GenerateDataKey",
-        "kms:Encrypt",
-        "kms:Decrypt",
-        "kms:DescribeKey"
+        "kms:Encrypt"
       ],
       "Resource": "*",
       "Condition": {
@@ -29,34 +27,9 @@
           "aws:SourceAccount": "841162707314"
         },
         "ArnLike": {
-          "aws:SourceArn": "arn:aws:guardduty:us-east-1:841162707314:detector/*"
+          "aws:SourceArn": "arn:aws:guardduty:*:841162707314:detector/*"
         }
       }
-    },
-    {
-      "Sid": "AllowKeyAdministration",
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::841162707314:user/Ateh"
-      },
-      "Action": [
-        "kms:Create*",
-        "kms:Describe*",
-        "kms:Enable*",
-        "kms:List*",
-        "kms:Put*",
-        "kms:Update*",
-        "kms:Revoke*",
-        "kms:Disable*",
-        "kms:Get*",
-        "kms:Delete*",
-        "kms:TagResource",
-        "kms:UntagResource",
-        "kms:ScheduleKeyDeletion",
-        "kms:CancelKeyDeletion",
-        "kms:RotateKeyOnDemand"
-      ],
-      "Resource": "*"
     }
   ]
 }
