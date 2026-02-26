@@ -8,145 +8,113 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-firehose_client = boto3.client("firehose")
+COMPLIANT_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
+EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
+EVENT_ROLE_ARN_EXCLUDED_LIST = list(os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(","))
 
-STREAM_NAME = os.environ["STREAM_NAME"]
-REGION_NAME = os.environ["REGION_NAME"]
+US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
+NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
 
-EVENT_NAME_EXCLUDED_LIST = [
-    e.strip() for e in os.environ["EVENT_NAME_EXCLUDED_LIST"].split(",") if e.strip()
-]
-
-EVENT_ROLE_ARN_EXCLUDED_LIST = [
-    r.strip() for r in os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(",") if r.strip()
-]
-
-MAX_RECORD_BATCH_SIZE = 1_000_000  # 1 MB
-MAX_RECORD_BATCH_LENGTH = 500
-
-def parse_gzip_log_file(s3_client, bucket, key):
-    response = s3_client.get_object(Bucket=bucket, Key=key)
-    with gzip.GzipFile(fileobj=response["Body"]) as f:
-        return json.loads(f.read().decode("utf-8"))
+MAX_RECORD_SIZE = 1000000
 
 
-def check_event_excluded(event):
-    """
-    Exclude events based on:
-    - eventName
-    - role ARN suffix match
-    """
-    if event.get("eventName") not in EVENT_NAME_EXCLUDED_LIST:
-        return False
+def check_compliant_account(key):
+    return any(account in key for account in COMPLIANT_ACCOUNT_NUMBERS)
 
-    roles = [
-        event.get("userIdentity", {}).get("arn"),
-        event.get("userIdentity", {})
-             .get("sessionContext", {})
-             .get("sessionIssuer", {})
-             .get("arn"),
-    ]
 
-    if isinstance(event.get("resources"), list):
-        for r in event["resources"]:
-            if isinstance(r, dict) and "ARN" in r:
-                roles.append(r["ARN"])
-
-    for role in roles:
-        if isinstance(role, str):
-            for excluded in EVENT_ROLE_ARN_EXCLUDED_LIST:
-                if role.endswith(excluded):
-                    return True
-
+def check_event_excluded(data):
+    roles_list = []
+    if data.get("eventName") in EVENT_NAME_EXCLUDED_LIST:
+        roles_list.append(data.get('userIdentity', {}).get('sessionContext', {}).get('sessionIssuer', {}).get('arn'))
+        roles_list.append(data.get('userIdentity', {}).get('arn'))
+        if isinstance(data.get('resources'), list):
+            for i in data.get('resources'):
+                if isinstance(i, dict) and "ARN" in i:
+                    roles_list.append(i.get("ARN"))
+        for i in roles_list:
+            if isinstance(i, str):
+                for j in EVENT_ROLE_ARN_EXCLUDED_LIST:
+                    if i.endswith(j):
+                        return True
     return False
 
 
 def filter_cloudtrail_events(data):
-    """
-    Filters CloudTrail records and batches them for Firehose
-    """
-    if not isinstance(data, dict) or "Records" not in data:
-        return []
+    filtered_records = []
+    if "Records" not in data:
+        return filtered_records
 
-    batches = []
-    current_batch = []
-
-    for record in data["Records"]:
-        if sys.getsizeof(record) > MAX_RECORD_BATCH_SIZE:
-            logger.warning("Single CloudTrail record exceeds Firehose size limit")
+    for record in data.get("Records"):
+        if sys.getsizeof(record) > MAX_RECORD_SIZE:
+            logger.warning("Record size exceeds 1,000 KiB, skipping")
             continue
+        if not check_event_excluded(record):
+            filtered_records.append(record)
 
-        if check_event_excluded(record):
-            continue
-
-        serialized = json.dumps(current_batch + [record])
-
-        if sys.getsizeof(serialized) > MAX_RECORD_BATCH_SIZE:
-            batches.append(json.dumps(current_batch))
-            current_batch = [record]
-        else:
-            current_batch.append(record)
-
-        if len(current_batch) >= MAX_RECORD_BATCH_LENGTH:
-            batches.append(json.dumps(current_batch))
-            current_batch = []
-
-    if current_batch:
-        batches.append(json.dumps(current_batch))
-
-    return batches
+    return filtered_records
 
 
-def send_to_firehose(batches):
-    for batch in batches:
-        firehose_client.put_record_batch(
-            DeliveryStreamName=STREAM_NAME,
-            Records=[{"Data": batch}],
+def parse_gzip_log_file(s3, key, bucket):
+    response = s3.get_object(Bucket=bucket, Key=key)
+    with gzip.GzipFile(fileobj=response.get("Body")) as file:
+        return json.loads(file.read().decode("UTF-8"))
+
+def send_to_sqs(sqs, queue_url, records):
+    batch = []
+    batch_size = 0
+
+    for record in records:
+        record_size = len(json.dumps(record).encode('utf-8'))
+
+        if batch_size + record_size > MAX_RECORD_SIZE and batch:
+            sqs.send_message(
+                QueueUrl=queue_url,
+                MessageBody=json.dumps({"Records": batch})
+            )
+            batch = []
+            batch_size = 0
+
+        batch.append(record)
+        batch_size += record_size
+
+    if batch:
+        sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps({"Records": batch})
         )
 
+
 def lambda_handler(event, context):
-    logger.info("Starting CloudTrail log processing")
-    logger.info("Incoming event: %s", json.dumps(event))
-
-    records = event.get("Records")
-    if not isinstance(records, list) or not records:
-        logger.warning("Non-S3 or malformed event received. Ignoring.")
-        return {
-            "statusCode": 200,
-            "body": "Ignored non-S3 event",
-        }
-
-    record = records[0]
-
-    if record.get("eventSource") != "aws:s3":
-        logger.warning("Event source is not S3. Ignoring.")
-        return {
-            "statusCode": 200,
-            "body": "Ignored non-S3 source",
-        }
+    logger.info("Starting processing cloudtrail logs")
 
     try:
-        bucket = record["s3"]["bucket"]["name"]
-        key = record["s3"]["object"]["key"]
+        s3 = boto3.client('s3', region_name=os.environ["REGION_NAME"])
+        sqs = boto3.client('sqs')
 
-        logger.info("Processing object s3://%s/%s", bucket, key)
+        bucket = event.get("Records")[0].get("s3").get("bucket").get("name")
+        key = event.get("Records")[0].get("s3").get("object").get("key")
 
-        s3_client = boto3.client("s3", region_name=REGION_NAME)
+        content = parse_gzip_log_file(s3=s3, key=key, bucket=bucket)
 
-        content = parse_gzip_log_file(s3_client, bucket, key)
-        batches = filter_cloudtrail_events(content)
+        if not content or not isinstance(content, dict):
+            raise Exception("Cannot unpack cloudtrail logs")
 
-        if batches:
-            send_to_firehose(batches)
-            logger.info("Successfully sent %d batch(es) to Firehose", len(batches))
+        filtered_records = filter_cloudtrail_events(data=content)
+
+        if filtered_records:
+            if check_compliant_account(key):
+                send_to_sqs(sqs, US_COMPLIANT_QUEUE_URL, filtered_records)
+                logger.info("US-Compliant CloudTrail logs sent to SQS")
+            else:
+                send_to_sqs(sqs, NON_US_COMPLIANT_QUEUE_URL, filtered_records)
+                logger.info("Non-Compliant CloudTrail logs sent to SQS")
         else:
-            logger.info("No CloudTrail records after filtering")
+            logger.warning("No records to process after filtering")
 
-    except Exception as e:
-        logger.exception("Failed processing CloudTrail logs")
-        raise e
+    except Exception as error:
+        logger.exception(error)
 
     return {
-        "statusCode": 200,
-        "body": "Processing complete",
+        'statusCode': 200,
+        'body': 'Processing complete'
     }
