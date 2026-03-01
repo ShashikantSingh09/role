@@ -1,39 +1,14 @@
 {
-  "version": "0",
-  "id": "9b2c1e7a-3f42-4d7a-b5f3-abc123test",
-  "detail-type": "AWS API Call via CloudTrail",
-  "source": "aws.cloudtrail",
-  "account": "123456789012",
-  "time": "2026-01-28T10:30:00Z",
-  "region": "us-east-1",
-  "resources": [],
-  "detail": {
-    "eventVersion": "1.08",
-    "userIdentity": {
-      "type": "IAMUser",
-      "principalId": "AIDAEXAMPLEUSER",
-      "arn": "arn:aws:iam::123456789012:user/secops-test-user",
-      "accountId": "123456789012",
-      "userName": "secops-test-user"
-    },
-    "eventTime": "2026-01-28T10:30:00Z",
-    "eventSource": "iam.amazonaws.com",
-    "eventName": "CreateUser",
-    "awsRegion": "us-east-1",
-    "sourceIPAddress": "203.0.113.25",
-    "userAgent": "aws-cli/2.15.0",
-    "requestParameters": {
-      "userName": "secops-test-user"
-    },
-    "responseElements": {
-      "user": {
-        "userName": "secops-test-user",
-        "arn": "arn:aws:iam::123456789012:user/secops-test-user"
+  "Records": [
+    {
+      "s3": {
+        "bucket": {
+          "name": "google-feed-secops-bucket"
+        },
+        "object": {
+          "key": "AWSLogs/841162707314/CloudTrail/us-east-1/2026/03/01/841162707314_CloudTrail_us-east-1_20260301T0000Z_0h15HLt7vYbDYA2W.json.gz"
+        }
       }
-    },
-    "readOnly": false,
-    "eventType": "AwsApiCall",
-    "managementEvent": true,
-    "recipientAccountId": "123456789012"
-  }
+    }
+  ]
 }
