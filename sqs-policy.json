@@ -1,27 +1,27 @@
 {
   "Version": "2012-10-17",
-  "Id": "PolicyForSNS",
+  "Id": "PolicyForLambda",
   "Statement": [
     {
       "Sid": "OwnerFullAccess",
       "Effect": "Allow",
       "Principal": {
-        "AWS": "841162707314"
+        "AWS": "arn:aws:iam::841162707314:root"
       },
       "Action": "SQS:*",
-      "Resource": "arn:aws:sqs:us-east-1:841162707314:CloudTrail-Notification-Queue"
+      "Resource": "arn:aws:sqs:us-east-1:841162707314:Destination-Test-Queue"
     },
     {
-      "Sid": "AllowSNS",
+      "Sid": "AllowLambdaToSendMessage",
       "Effect": "Allow",
       "Principal": {
-        "Service": "sns.amazonaws.com"
+        "Service": "lambda.amazonaws.com"
       },
       "Action": "SQS:SendMessage",
-      "Resource": "arn:aws:sqs:us-east-1:841162707314:CloudTrail-Notification-Queue",
+      "Resource": "arn:aws:sqs:us-east-1:841162707314:Destination-Test-Queue",
       "Condition": {
         "ArnEquals": {
-          "aws:SourceArn": "arn:aws:sns:us-east-1:841162707314:CloudTrail-Notification-Topic"
+          "aws:SourceArn": "arn:aws:lambda:us-east-1:841162707314:function:s3-to-sqs"
         }
       }
     }
