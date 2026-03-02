@@ -1,120 +1,64 @@
-import gzip
-import json
 import logging
 import os
-import sys
 import boto3
+import base64
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-COMPLIANT_ACCOUNT_NUMBERS = [account.strip() for account in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")]
-EVENT_NAME_EXCLUDED_LIST = list(os.environ["EVENT_NAME_EXCLUDED_LIST"].split(","))
-EVENT_ROLE_ARN_EXCLUDED_LIST = list(os.environ["EVENT_ROLE_ARN_EXCLUDED_LIST"].split(","))
-
+US_COMPLIANT_ACCOUNTS = os.environ["US_COMPLIANT_ACCOUNTS"].split(",")
 US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
 NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
+REGION_NAME = os.environ["REGION_NAME"]
 
-MAX_RECORD_SIZE = 1000000
+MAX_SQS_SIZE = 262144  # 256 KB
 
 
 def check_compliant_account(key):
-    return any(account in key for account in COMPLIANT_ACCOUNT_NUMBERS)
-
-
-def check_event_excluded(data):
-    roles_list = []
-    if data.get("eventName") in EVENT_NAME_EXCLUDED_LIST:
-        roles_list.append(data.get('userIdentity', {}).get('sessionContext', {}).get('sessionIssuer', {}).get('arn'))
-        roles_list.append(data.get('userIdentity', {}).get('arn'))
-        if isinstance(data.get('resources'), list):
-            for i in data.get('resources'):
-                if isinstance(i, dict) and "ARN" in i:
-                    roles_list.append(i.get("ARN"))
-        for i in roles_list:
-            if isinstance(i, str):
-                for j in EVENT_ROLE_ARN_EXCLUDED_LIST:
-                    if i.endswith(j):
-                        return True
-    return False
-
-
-def filter_cloudtrail_events(data):
-    filtered_records = []
-    if "Records" not in data:
-        return filtered_records
-
-    for record in data.get("Records"):
-        if sys.getsizeof(record) > MAX_RECORD_SIZE:
-            logger.warning("Record size exceeds 1,000 KiB, skipping")
-            continue
-        if not check_event_excluded(record):
-            filtered_records.append(record)
-
-    return filtered_records
-
-
-def parse_gzip_log_file(s3, key, bucket):
-    response = s3.get_object(Bucket=bucket, Key=key)
-    with gzip.GzipFile(fileobj=response.get("Body")) as file:
-        return json.loads(file.read().decode("UTF-8"))
-
-def send_to_sqs(sqs, queue_url, records):
-    batch = []
-    batch_size = 0
-
-    for record in records:
-        record_size = len(json.dumps(record).encode('utf-8'))
-
-        if batch_size + record_size > MAX_RECORD_SIZE and batch:
-            sqs.send_message(
-                QueueUrl=queue_url,
-                MessageBody=json.dumps({"Records": batch})
-            )
-            batch = []
-            batch_size = 0
-
-        batch.append(record)
-        batch_size += record_size
-
-    if batch:
-        sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=json.dumps({"Records": batch})
-        )
+    return any(account.strip() in key for account in US_COMPLIANT_ACCOUNTS)
 
 
 def lambda_handler(event, context):
-    logger.info("Starting processing cloudtrail logs")
+    logger.info("Starting raw CloudTrail forwarding")
 
     try:
-        s3 = boto3.client('s3', region_name=os.environ["REGION_NAME"])
-        sqs = boto3.client('sqs')
+        if not event.get("Records"):
+            return {"statusCode": 400, "body": "Invalid event format"}
 
-        bucket = event.get("Records")[0].get("s3").get("bucket").get("name")
-        key = event.get("Records")[0].get("s3").get("object").get("key")
+        s3 = boto3.client("s3", region_name=REGION_NAME)
+        sqs = boto3.client("sqs")
 
-        content = parse_gzip_log_file(s3=s3, key=key, bucket=bucket)
+        bucket = event["Records"][0]["s3"]["bucket"]["name"]
+        key = event["Records"][0]["s3"]["object"]["key"]
 
-        if not content or not isinstance(content, dict):
-            raise Exception("Cannot unpack cloudtrail logs")
+        logger.info(f"Fetching object {key} from {bucket}")
 
-        filtered_records = filter_cloudtrail_events(data=content)
+        response = s3.get_object(Bucket=bucket, Key=key)
+        file_content = response["Body"].read()
 
-        if filtered_records:
-            if check_compliant_account(key):
-                send_to_sqs(sqs, US_COMPLIANT_QUEUE_URL, filtered_records)
-                logger.info("US-Compliant CloudTrail logs sent to SQS")
-            else:
-                send_to_sqs(sqs, NON_US_COMPLIANT_QUEUE_URL, filtered_records)
-                logger.info("Non-Compliant CloudTrail logs sent to SQS")
-        else:
-            logger.warning("No records to process after filtering")
+        if len(file_content) > MAX_SQS_SIZE:
+            logger.error("File exceeds SQS 256KB limit")
+            return {"statusCode": 400, "body": "File too large for SQS"}
 
-    except Exception as error:
-        logger.exception(error)
+        encoded_content = base64.b64encode(file_content).decode("utf-8")
+
+        queue_url = (
+            US_COMPLIANT_QUEUE_URL
+            if check_compliant_account(key)
+            else NON_US_COMPLIANT_QUEUE_URL
+        )
+
+        sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=encoded_content
+        )
+
+        logger.info("Raw .json.gz file sent to SQS successfully")
+
+    except Exception as e:
+        logger.exception("Error processing file")
 
     return {
-        'statusCode': 200,
-        'body': 'Processing complete'
+        "statusCode": 200,
+        "body": "Processing complete"
     }
