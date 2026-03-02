@@ -1,113 +1,117 @@
-AWSTemplateFormatVersion: '2010-09-09'
+AWSTemplateFormatVersion: 2010-09-09
 Transform: AWS::Serverless-2016-10-31
-Description: Firehose Delivery Stream to ingest CloudTrail logs to Google SecOps
-  with Lambda-based filtering
+Description: CloudTrail S3 to SQS mediator Lambda (US / Non-US split)
 
 Parameters:
-  GoogleSecOpsSecretName:
-    Type: String
-    Default: google-secops-credentials
-
-  GoogleSecOpsEndpointUrl:
-    Type: String
-    Default: Secops-endpoint_url
-
-  GoogleSecOpsApiKey:
-    Type: String
-    Default: Secops-api_key
-
-  EventRole:
-    Type: String
-    Default: ExportTaskRole,ExtractRole,Extract-10J5Z8O7JDV9A,EmrFS-Session,Extract-JUKG0T0AARWX,XProtectMRTDynamoDBTableReadOnlyRole,spinnakerManaged-terraform,newrelic-infrastructure
-
-  EventName:
-    Type: String
-    Default: Decrypt,GenerateDataKey,AssumeRole,GetBucketLocation,Encrypt
-
-  StreamName:
-    Type: String
-    Default: aws-cloudtrail-logs-to-google-secops
 
   BucketName:
     Type: String
-    Default: jamf-global-cloudtrail-logs
+    Default: aws-cloudtrail-logs-356315793174-fb7617eb
+    Description: CloudTrail S3 bucket name
+
+  RegionName:
+    Type: String
+    Default: us-east-1
+    Description: Region where the S3 bucket exists
+
+  EventName:
+    Type: String
+    Default: ''
+    Description: Event names to exclude
+
+  EventRole:
+    Type: String
+    Default: ''
+    Description: Event role ARNs to exclude
+
+  CompliantAccountNumbersList:
+    Type: String
+    Default: >-
+        315987135019, 453013692738, 444490906999, 221212361977, 
+        400235226088, 279250952523, 384261514181, 426741698857, 
+        612294365027, 642848149852, 266023621710, 142217395313, 
+        556396476912, 667623697424, 723066671449, 588009609257, 
+        603843106361, 081700944673, 102055880387, 734913321718, 
+        799006065355, 953770353853, 857960491540, 802681188238, 
+        748506105067, 637423430067, 891376983106, 654654495066,
+        315987135019, 453013692738, 444490906999, 221212361977,
+        400235226088, 279250952523, 384261514181, 426741698857,
+        612294365027, 642848149852, 266023621710, 142217395313,
+        556396476912, 667623697424, 723066671449, 588009609257,
+        603843106361, 081700944673, 102055880387, 734913321718,
+        799006065355, 953770353853, 857960491540, 802681188238,
+        748506105067, 851725276293
+    Description: List of US compliant AWS account numbers
 
 Resources:
 
-  DeliveryRole:
-    Type: AWS::IAM::Role
+  USCompliantQueue:
+    Type: AWS::SQS::Queue
     Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: firehose.amazonaws.com
-            Action: sts:AssumeRole
+      QueueName: us-compliant-queue
 
-  DeliveryPolicy:
-    Type: AWS::IAM::ManagedPolicy
+  NonUSCompliantQueue:
+    Type: AWS::SQS::Queue
     Properties:
+      QueueName: non-us-compliant-queue
+
+  USCompliantQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref USCompliantQueue
       PolicyDocument:
-        Version: '2012-10-17'
+        Version: 2012-10-17
         Statement:
-          - Effect: Allow
-            Action:
-              - s3:AbortMultipartUpload
-              - s3:GetBucketLocation
-              - s3:GetObject
-              - s3:ListBucket
-              - s3:ListBucketMultipartUploads
-              - s3:PutObject
-            Resource:
-              - !Sub arn:aws:s3:::${BucketName}
-              - !Sub arn:aws:s3:::${BucketName}/*
 
-          - Effect: Allow
-            Action:
-              - logs:CreateLogStream
-              - logs:PutLogEvents
-            Resource:
-              - !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/kinesisfirehose/${StreamName}:*
+          - Sid: OwnerFullAccess
+            Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::841162707314:root
+            Action: SQS:*
+            Resource: !GetAtt USCompliantQueue.Arn
 
-      Roles:
-        - !Ref DeliveryRole
+          - Sid: AllowLambdaToSendMessage
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt USCompliantQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt CloudtrailLogsFilteringFunction.Arn
 
-  CloudtrailDeliveryStream:
-    Type: AWS::KinesisFirehose::DeliveryStream
+  NonUSCompliantQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
     Properties:
-      DeliveryStreamName: !Ref StreamName
-      DeliveryStreamType: DirectPut
+      Queues:
+        - !Ref NonUSCompliantQueue
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
 
-      HttpEndpointDestinationConfiguration:
-        RoleARN: !GetAtt DeliveryRole.Arn
+          - Sid: OwnerFullAccess
+            Effect: Allow
+            Principal:
+              AWS: arn:aws:iam::841162707314:root
+            Action: SQS:*
+            Resource: !GetAtt NonUSCompliantQueue.Arn
 
-        EndpointConfiguration:
-          Name: google-secops
-          Url: !Sub '{{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsEndpointUrl}}}?key={{resolve:secretsmanager:${GoogleSecOpsSecretName}:SecretString:${GoogleSecOpsApiKey}}}'
-
-        BufferingHints:
-          IntervalInSeconds: 60
-          SizeInMBs: 1
-
-        RetryOptions:
-          DurationInSeconds: 300
-
-        CloudWatchLoggingOptions:
-          Enabled: true
-          LogGroupName: !Sub /aws/kinesisfirehose/${StreamName}
-          LogStreamName: HttpEndpointDelivery
-
-        S3Configuration:
-          BucketARN: !Sub arn:aws:s3:::${BucketName}
-          RoleARN: !GetAtt DeliveryRole.Arn
-          CompressionFormat: GZIP
+          - Sid: AllowLambdaToSendMessage
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !GetAtt NonUSCompliantQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt CloudtrailLogsFilteringFunction.Arn
 
   CloudtrailLogsFilteringFunctionRole:
     Type: AWS::IAM::Role
     Properties:
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: 2012-10-17
         Statement:
           - Effect: Allow
             Principal:
@@ -118,30 +122,59 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 
       Policies:
-        - PolicyName: CloudtrailLogsFilteringInlinePolicy
+        - PolicyName: LambdaS3ToSQSAccess
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: 2012-10-17
             Statement:
+
               - Effect: Allow
                 Action:
-                  - firehose:PutRecordBatch
+                  - s3:GetObject
+                  - s3:HeadObject
+                Resource: !Sub arn:aws:s3:::${BucketName}/*
+
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
                 Resource:
-                  - !GetAtt CloudtrailDeliveryStream.Arn
+                  - !GetAtt USCompliantQueue.Arn
+                  - !GetAtt NonUSCompliantQueue.Arn
 
   CloudtrailLogsFilteringFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: cloudtrail-logs-filtering
+      FunctionName: s3-to-sqs-cloudtrail
       Runtime: python3.12
-      Handler: cloudtrail-logs-filtering.lambda_handler
+      Handler: index.lambda_handler
       CodeUri: .
-      MemorySize: 256
-      Timeout: 500
+      MemorySize: 512
+      Timeout: 30
       Role: !GetAtt CloudtrailLogsFilteringFunctionRole.Arn
+
       Environment:
         Variables:
-          STREAM_NAME: !Ref StreamName
+          REGION_NAME: !Ref RegionName
+          US_COMPLIANT_ACCOUNTS: !Ref CompliantAccountNumbersList
           EVENT_NAME_EXCLUDED_LIST: !Ref EventName
           EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRole
+          US_COMPLIANT_QUEUE_URL: !Ref USCompliantQueue
+          NON_US_COMPLIANT_QUEUE_URL: !Ref NonUSCompliantQueue
 
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref CloudtrailLogsFilteringFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::${BucketName}
 
+Outputs:
+
+  LambdaName:
+    Value: !Ref CloudtrailLogsFilteringFunction
+
+  USQueueURL:
+    Value: !Ref USCompliantQueue
+
+  NonUSQueueURL:
+    Value: !Ref NonUSCompliantQueue
