@@ -1,6 +1,6 @@
 {
   "Version": "2012-10-17",
-  "Id": "PolicyForLambda",
+  "Id": "PolicyForLambdaAndS3",
   "Statement": [
     {
       "Sid": "OwnerFullAccess",
@@ -24,6 +24,32 @@
           "aws:SourceArn": "arn:aws:lambda:us-east-1:841162707314:function:s3-to-sqs"
         }
       }
+    },
+    {
+      "Sid": "AllowS3ToSendMessage",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "s3.amazonaws.com"
+      },
+      "Action": "SQS:SendMessage",
+      "Resource": "arn:aws:sqs:us-east-1:841162707314:Destination-Test-Queue",
+      "Condition": {
+        "ArnLike": {
+          "aws:SourceArn": "arn:aws:s3:::google-feed-secops-bucket"
+        }
+      }
+    },
+    {
+      "Sid": "AllowConsumersToReadMessages",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": [
+        "SQS:ReceiveMessage",
+        "SQS:DeleteMessage",
+        "SQS:GetQueueAttributes",
+        "SQS:GetQueueUrl"
+      ],
+      "Resource": "arn:aws:sqs:us-east-1:841162707314:Destination-Test-Queue"
     }
   ]
 }
