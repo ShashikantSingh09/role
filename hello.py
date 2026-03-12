@@ -1,59 +1,57 @@
 import logging
 import os
 import boto3
-import json
-
+ 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
+ 
 US_COMPLIANT_ACCOUNTS = os.environ["US_COMPLIANT_ACCOUNTS"].split(",")
 US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
 NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
 REGION_NAME = os.environ["REGION_NAME"]
-
-
+ 
+ 
 def check_compliant_account(key):
     return any(account.strip() in key for account in US_COMPLIANT_ACCOUNTS)
-
-
+ 
+ 
 def lambda_handler(event, context):
-    logger.info("Starting CloudTrail forwarding (S3 path only)")
-
+    logger.info("Starting CloudTrail S3 path forwarding to Google SecOps")
+ 
     try:
         if not event.get("Records"):
             return {"statusCode": 400, "body": "Invalid event format"}
-
-        sqs = boto3.client("sqs", region_name=REGION_NAME)
-
-        bucket = event["Records"][0]["s3"]["bucket"]["name"]
-        key = event["Records"][0]["s3"]["object"]["key"]
-
-        logger.info(f"Processing S3 object path: s3://{bucket}/{key}")
-
-        # Message containing only the S3 path
-        message_body = json.dumps({
-            "bucket": bucket,
-            "key": key,
-            "s3_uri": f"s3://{bucket}/{key}"
-        })
-
-        queue_url = (
-            US_COMPLIANT_QUEUE_URL
-            if check_compliant_account(key)
-            else NON_US_COMPLIANT_QUEUE_URL
-        )
-
-        sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=message_body
-        )
-
-        logger.info("S3 path sent to SQS successfully")
-
+ 
+        sqs = boto3.client("sqs")
+ 
+        for record in event["Records"]:
+            bucket = record["s3"]["bucket"]["name"]
+            key = record["s3"]["object"]["key"]
+            s3_uri = f"s3://{bucket}/{key}"
+ 
+            logger.info(f"Processing object: {s3_uri}")
+ 
+            queue_url = (
+                US_COMPLIANT_QUEUE_URL
+                if check_compliant_account(key)
+                else NON_US_COMPLIANT_QUEUE_URL
+            )
+ 
+            queue_label = (
+                "US_COMPLIANT" if queue_url == US_COMPLIANT_QUEUE_URL else "NON_US_COMPLIANT"
+            )
+ 
+            sqs.send_message(
+                QueueUrl=queue_url,
+                MessageBody=s3_uri,
+            )
+ 
+            logger.info(
+                f"S3 path sent to {queue_label} queue successfully: {s3_uri}"
+            )
+ 
     except Exception as e:
         logger.exception("Error processing file")
-
-    return {
-        "statusCode": 200,
-        "body": "Processing complete"
-    }
+        return {"statusCode": 500, "body": f"Error: {str(e)}"}
+ 
+    return {"statusCode": 200, "body": "Processing complete"}
