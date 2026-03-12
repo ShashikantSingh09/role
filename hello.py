@@ -18,7 +18,7 @@ def check_compliant_account(key):
 
 
 def lambda_handler(event, context):
-    logger.info("Starting CloudTrail S3 notification forwarding to Google SecOps")
+    logger.info("Starting CloudTrail forwarding to Google SecOps")
 
     try:
         if not event.get("Records"):
@@ -28,11 +28,11 @@ def lambda_handler(event, context):
 
         for record in event["Records"]:
             bucket = record["s3"]["bucket"]["name"]
-            key = urllib.parse.unquote_plus(
-                record["s3"]["object"]["key"]
-            )
+            key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
 
-            logger.info(f"Processing object: s3://{bucket}/{key}")
+            s3_uri = f"s3://{bucket}/{key}"
+
+            logger.info(f"Processing object: {s3_uri}")
 
             queue_url = (
                 US_COMPLIANT_QUEUE_URL
@@ -46,16 +46,13 @@ def lambda_handler(event, context):
                 else "NON_US_COMPLIANT"
             )
 
-            s3_notification = {"Records": [record]}
-
             sqs.send_message(
                 QueueUrl=queue_url,
-                MessageBody=json.dumps(s3_notification),
+                MessageBody=s3_uri
             )
 
             logger.info(
-                f"S3 notification forwarded to {queue_label} queue for: "
-                f"s3://{bucket}/{key}"
+                f"Forwarded {s3_uri} to {queue_label} queue"
             )
 
     except Exception as e:
