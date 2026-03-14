@@ -1,7 +1,9 @@
+import gzip
+import json
 import logging
 import os
+import urllib.parse
 import boto3
-import base64
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -11,63 +13,97 @@ US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
 NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
 REGION_NAME = os.environ["REGION_NAME"]
 
-MAX_SQS_SIZE = 262144  # 256 KB
+MAX_SQS_SIZE = 262144 
+
+s3 = boto3.client("s3", region_name=REGION_NAME)
+sqs = boto3.client("sqs", region_name=REGION_NAME)
 
 
 def check_compliant_account(key):
-    """
-    Check if the S3 object key belongs to a US compliant account
-    """
     return any(account.strip() in key for account in US_COMPLIANT_ACCOUNTS)
 
 
 def lambda_handler(event, context):
-    logger.info("Starting raw CloudTrail forwarding")
+    logger.info("Starting CloudTrail log forwarding to Google SecOps")
 
     try:
         if not event.get("Records"):
-            return {
-                "statusCode": 400,
-                "body": "Invalid event format"
-            }
+            logger.error("No Records found in event")
+            return {"statusCode": 400, "body": "Invalid event format"}
 
-        s3 = boto3.client("s3", region_name=REGION_NAME)
-        sqs = boto3.client("sqs")
+        for record in event["Records"]:
+            bucket = record["s3"]["bucket"]["name"]
+            key = urllib.parse.unquote_plus(
+                record["s3"]["object"]["key"], encoding="utf-8"
+            )
 
-        bucket = event["Records"][0]["s3"]["bucket"]["name"]
-        key = event["Records"][0]["s3"]["object"]["key"]
+            logger.info(f"Processing: s3://{bucket}/{key}")
 
-        logger.info(f"Fetching object {key} from bucket {bucket}")
+            if not key.endswith(".json.gz"):
+                logger.info(f"Skipping non-CloudTrail file: {key}")
+                continue
 
-        response = s3.get_object(Bucket=bucket, Key=key)
-        file_content = response["Body"].read()
+            queue_url = (
+                US_COMPLIANT_QUEUE_URL
+                if check_compliant_account(key)
+                else NON_US_COMPLIANT_QUEUE_URL
+            )
+            queue_label = (
+                "US_COMPLIANT"
+                if queue_url == US_COMPLIANT_QUEUE_URL
+                else "NON_US_COMPLIANT"
+            )
 
-        if len(file_content) > MAX_SQS_SIZE:
-            logger.error("File exceeds SQS 256KB limit")
-            return {
-                "statusCode": 400,
-                "body": "File too large for SQS"
-            }
+            response = s3.get_object(Bucket=bucket, Key=key)
+            compressed_data = response["Body"].read()
 
-        encoded_content = base64.b64encode(file_content).decode("utf-8")
+            # Decompress gzip to get raw CloudTrail JSON
+            raw_json = gzip.decompress(compressed_data).decode("utf-8")
 
-        queue_url = (
-            US_COMPLIANT_QUEUE_URL
-            if check_compliant_account(key)
-            else NON_US_COMPLIANT_QUEUE_URL
-        )
+            logger.info(
+                f"Decompressed CloudTrail log: {len(raw_json)} bytes "
+                f"from s3://{bucket}/{key}"
+            )
 
-        sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=encoded_content
-        )
+            if len(raw_json.encode("utf-8")) > MAX_SQS_SIZE:
+                logger.warning(
+                    f"File exceeds SQS 256KB limit ({len(raw_json)} bytes). "
+                    f"Splitting individual CloudTrail records."
+                )
+                ct_data = json.loads(raw_json)
+                ct_records = ct_data.get("Records", [])
 
-        logger.info("Raw .json.gz file sent to SQS successfully")
+                for i, ct_record in enumerate(ct_records):
+                    single_record = json.dumps({"Records": [ct_record]})
+
+                    if len(single_record.encode("utf-8")) > MAX_SQS_SIZE:
+                        logger.error(
+                            f"Single CloudTrail record {i} exceeds 256KB, skipping"
+                        )
+                        continue
+
+                    sqs.send_message(
+                        QueueUrl=queue_url,
+                        MessageBody=single_record,
+                    )
+
+                logger.info(
+                    f"Sent {len(ct_records)} individual records to "
+                    f"{queue_label} queue"
+                )
+            else:
+                sqs.send_message(
+                    QueueUrl=queue_url,
+                    MessageBody=raw_json,
+                )
+
+                logger.info(
+                    f"CloudTrail log sent to {queue_label} queue: "
+                    f"s3://{bucket}/{key}"
+                )
 
     except Exception as e:
         logger.exception("Error processing file")
+        return {"statusCode": 500, "body": f"Error: {str(e)}"}
 
-    return {
-        "statusCode": 200,
-        "body": "Processing complete"
-    }
+    return {"statusCode": 200, "body": "Processing complete"}
