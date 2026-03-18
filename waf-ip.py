@@ -1,7 +1,6 @@
 import json
 import logging
 import os
-import urllib.parse
 import boto3
 
 logger = logging.getLogger()
@@ -14,14 +13,13 @@ US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
 NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
 REGION_NAME = os.environ["REGION_NAME"]
 
+
 def get_account_id_from_key(key):
     try:
         return key.split("/")[1]
     except Exception:
         return None
 
-def is_compliant_account(account_id):
-    return account_id in US_COMPLIANT_ACCOUNTS
 
 def lambda_handler(event, context):
 
@@ -30,39 +28,37 @@ def lambda_handler(event, context):
 
     sqs = boto3.client("sqs", region_name=REGION_NAME)
 
-    for record in event["Records"]:
+    try:
+        for record in event.get("Records", []):
 
-        bucket = record["s3"]["bucket"]["name"]
-        key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+            key = record["s3"]["object"]["key"]
+            account_id = get_account_id_from_key(key)
 
-        account_id = get_account_id_from_key(key)
+            # Decide queue
+            if account_id in US_COMPLIANT_ACCOUNTS:
+                queue_url = US_COMPLIANT_QUEUE_URL
+                queue_label = "US_COMPLIANT"
+            else:
+                queue_url = NON_US_COMPLIANT_QUEUE_URL
+                queue_label = "NON_US_COMPLIANT"
 
-        queue_url = (
-            US_COMPLIANT_QUEUE_URL
-            if account_id and is_compliant_account(account_id)
-            else NON_US_COMPLIANT_QUEUE_URL
-        )
+            logger.info(f"Routing to {queue_label}")
 
-        queue_label = (
-            "US_COMPLIANT"
-            if queue_url == US_COMPLIANT_QUEUE_URL
-            else "NON_US_COMPLIANT"
-        )
+            message_body = json.dumps({
+                "Records": [record]
+            })
 
-        logger.info(f"Routing to {queue_label}")
+            logger.info(f"SQS Message Body: {message_body}")
 
-        message_body = json.dumps({
-            "Records": [record]
-        })
+            response = sqs.send_message(
+                QueueUrl=queue_url,
+                MessageBody=message_body
+            )
 
-        response = sqs.send_message(
-            QueueUrl=queue_url,
-            MessageBody=message_body
-        )
+            logger.info(f"Message sent. ID: {response['MessageId']}")
 
-        logger.info(f"Sent message ID: {response['MessageId']}")
+    except Exception as e:
+        logger.exception("Error processing event")
+        return {"statusCode": 500, "body": str(e)}
 
-    return {
-        "statusCode": 200,
-        "body": "Success"
-    }
+    return {"statusCode": 200, "body": "Success"}
