@@ -14,17 +14,14 @@ US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
 NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
 REGION_NAME = os.environ["REGION_NAME"]
 
-
 def get_account_id_from_key(key):
     try:
         return key.split("/")[1]
     except Exception:
         return None
 
-
 def is_compliant_account(account_id):
     return account_id in US_COMPLIANT_ACCOUNTS
-
 
 def lambda_handler(event, context):
 
