@@ -33,8 +33,7 @@ def lambda_handler(event, context):
 
         for record in event["Records"]:
             bucket = record["s3"]["bucket"]["name"]
-            key = urllib.parse.unquote_plus(
-                record["s3"]["object"]["key"], encoding="utf-8"
+            key = urllib.parse.unquote(record["s3"]["object"]["key"])
             )
 
             logger.info(f"Processing: s3://{bucket}/{key}")
