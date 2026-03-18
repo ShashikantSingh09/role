@@ -1,4 +1,3 @@
-import gzip
 import json
 import logging
 import os
@@ -8,70 +7,65 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-US_COMPLIANT_ACCOUNTS = os.environ["US_COMPLIANT_ACCOUNTS"].split(",")
+US_COMPLIANT_ACCOUNTS = [
+    acc.strip() for acc in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")
+]
 US_COMPLIANT_QUEUE_URL = os.environ["US_COMPLIANT_QUEUE_URL"]
 NON_US_COMPLIANT_QUEUE_URL = os.environ["NON_US_COMPLIANT_QUEUE_URL"]
 REGION_NAME = os.environ["REGION_NAME"]
-MAX_SQS_SIZE = 262144
-
-s3 = boto3.client("s3", region_name=REGION_NAME)
-sqs = boto3.client("sqs", region_name=REGION_NAME)
 
 
-def check_compliant_account(key):
-    return any(account.strip() in key for account in US_COMPLIANT_ACCOUNTS)
+def get_account_id_from_key(key):
+    try:
+        return key.split("/")[1]
+    except Exception:
+        return None
+
+
+def is_compliant_account(account_id):
+    return account_id in US_COMPLIANT_ACCOUNTS
 
 
 def lambda_handler(event, context):
-    logger.info("Starting CloudTrail log forwarding to Google SecOps")
 
-    try:
-        if not event.get("Records"):
-            logger.error("No Records found in event")
-            return {"statusCode": 400, "body": "Invalid event format"}
+    logger.info("Received S3 event")
+    logger.info(json.dumps(event))
 
-        for record in event["Records"]:
-            bucket = record["s3"]["bucket"]["name"]
-            key = urllib.parse.unquote(record["s3"]["object"]["key"])
+    sqs = boto3.client("sqs", region_name=REGION_NAME)
 
-            logger.info("Processing: s3://%s/%s", bucket, key)
+    for record in event["Records"]:
 
-            if not key.endswith(".json.gz"):
-                logger.info("Skipping non-CloudTrail file: %s", key)
-                continue
+        bucket = record["s3"]["bucket"]["name"]
+        key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
 
-            queue_url = US_COMPLIANT_QUEUE_URL if check_compliant_account(key) else NON_US_COMPLIANT_QUEUE_URL
-            queue_label = "US_COMPLIANT" if queue_url == US_COMPLIANT_QUEUE_URL else "NON_US_COMPLIANT"
+        account_id = get_account_id_from_key(key)
 
-            response = s3.get_object(Bucket=bucket, Key=key)
-            compressed_data = response["Body"].read()
+        queue_url = (
+            US_COMPLIANT_QUEUE_URL
+            if account_id and is_compliant_account(account_id)
+            else NON_US_COMPLIANT_QUEUE_URL
+        )
 
-            raw_json = gzip.decompress(compressed_data).decode("utf-8")
+        queue_label = (
+            "US_COMPLIANT"
+            if queue_url == US_COMPLIANT_QUEUE_URL
+            else "NON_US_COMPLIANT"
+        )
 
-            logger.info("Decompressed CloudTrail log: %d bytes", len(raw_json))
+        logger.info(f"Routing to {queue_label}")
 
-            if len(raw_json.encode("utf-8")) > MAX_SQS_SIZE:
-                logger.warning("File exceeds SQS 256KB limit. Splitting records.")
+        message_body = json.dumps({
+            "Records": [record]
+        })
 
-                ct_data = json.loads(raw_json)
-                ct_records = ct_data.get("Records", [])
+        response = sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=message_body
+        )
 
-                for i, ct_record in enumerate(ct_records):
-                    single_record = json.dumps({"Records": [ct_record]})
+        logger.info(f"Sent message ID: {response['MessageId']}")
 
-                    if len(single_record.encode("utf-8")) > MAX_SQS_SIZE:
-                        logger.error("Single record %d exceeds 256KB, skipping", i)
-                        continue
-
-                    sqs.send_message(QueueUrl=queue_url, MessageBody=single_record)
-
-                logger.info("Sent %d individual records to %s queue", len(ct_records), queue_label)
-            else:
-                sqs.send_message(QueueUrl=queue_url, MessageBody=raw_json)
-                logger.info("CloudTrail log sent to %s queue", queue_label)
-
-    except Exception as e:
-        logger.exception("Error processing file")
-        return {"statusCode": 500, "body": "Error: " + str(e)}
-
-    return {"statusCode": 200, "body": "Processing complete"}
+    return {
+        "statusCode": 200,
+        "body": "Success"
+    }
