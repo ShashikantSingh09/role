@@ -1,103 +1,180 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Chronicle CloudTrail ingestion with EventBridge -> SNS -> SQS
+Transform: AWS::Serverless-2016-10-31
+Description: CloudTrail S3 → Lambda → SQS Routing (Google SecOps Compatible)
 
 Parameters:
-  CloudTrailBucketName:
+
+  S3BucketName:
     Type: String
-    Default: google-feed-secops-bucket
-    Description: Existing CloudTrail S3 bucket name
+    Default: aws-cloudtrail-logs-975050093323-4c9605b3
+
+  USCompliantAccounts:
+    Type: String
+    Default: "315987135019,453013692738,444490906999,221212361977,400235226088,279250952523,384261514181,426741698857,612294365027,642848149852,266023621710,142217395313,556396476912,667623697424,723066671449,588009609257,603843106361,081700944673,102055880387,734913321718,799006065355,953770353853,857960491540,802681188238,748506105067,637423430067,891376983106,654654495066,851725276293"
+
+  RegionName:
+    Type: String
+    Default: us-east-1
+
+  EventNameExcludedList:
+    Type: String
+    Default: "AssumeRole,GetCallerIdentity"
+
+  EventRoleArnExcludedList:
+    Type: String
+    Default: ""
 
 Resources:
 
-  CloudTrailSNSTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: CloudTrail-Notification-Topic
-
-  SNSTopicPolicy:
-    Type: AWS::SNS::TopicPolicy
-    Properties:
-      Topics:
-        - !Ref CloudTrailSNSTopic
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowEventBridgePublish
-            Effect: Allow
-            Principal:
-              Service: events.amazonaws.com
-            Action:
-              - sns:Publish
-            Resource: !Ref CloudTrailSNSTopic
-
-  CloudTrailSQSQueue:
+  LambdaDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: CloudTrail-Notification-Queue
-      VisibilityTimeout: 30 # optional
-      MessageRetentionPeriod: 345600 # optional (4 days)
+      QueueName: lambda-dlq
 
-  SQSQueuePolicy:
+  USCompliantQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: us-compliant-queue
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt LambdaDLQ.Arn
+        maxReceiveCount: 5
+
+  NonUSCompliantQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: destination-test-queue
+      VisibilityTimeout: 300
+      MessageRetentionPeriod: 345600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt LambdaDLQ.Arn
+        maxReceiveCount: 5
+
+  NonUSQueuePolicy:
     Type: AWS::SQS::QueuePolicy
     Properties:
       Queues:
-        - !Ref CloudTrailSQSQueue
+        - !Ref NonUSCompliantQueue
       PolicyDocument:
-        Version: '2012-10-17'
-        Id: __default_policy_ID
+        Version: "2012-10-17"
         Statement:
-          - Sid: __owner_statement
+
+          - Sid: OwnerFullAccess
             Effect: Allow
             Principal:
               AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
-            Action:
-              - SQS:*
-            Resource: !GetAtt CloudTrailSQSQueue.Arn
+            Action: "SQS:*"
+            Resource: !GetAtt NonUSCompliantQueue.Arn
 
-          - Sid: AllowSNSPublish
+          - Sid: AllowLambdaToSendMessage
             Effect: Allow
             Principal:
-              Service: sns.amazonaws.com
-            Action:
-              - SQS:SendMessage
-            Resource: !GetAtt CloudTrailSQSQueue.Arn
-            Condition:
-              ArnEquals:
-                aws:SourceArn: !Ref CloudTrailSNSTopic
+              Service: lambda.amazonaws.com
+            Action: SQS:SendMessage
+            Resource: !GetAtt NonUSCompliantQueue.Arn
 
-  SNSSubscription:
-    Type: AWS::SNS::Subscription
+  USQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
     Properties:
-      TopicArn: !Ref CloudTrailSNSTopic
-      Protocol: sqs
-      Endpoint: !GetAtt CloudTrailSQSQueue.Arn
-      RawMessageDelivery: true
+      Queues:
+        - !Ref USCompliantQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
 
-  PutObjectEventRule:
-    Type: AWS::Events::Rule
+          - Sid: OwnerFullAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: "SQS:*"
+            Resource: !GetAtt USCompliantQueue.Arn
+
+          - Sid: AllowLambdaToSendMessage
+            Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: SQS:SendMessage
+            Resource: !GetAtt USCompliantQueue.Arn
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
     Properties:
-      Name: CloudTrail-S3-PutObject-Notify
-      EventPattern:
-        source:
-          - aws.s3
-        detail-type:
-          - AWS API Call via CloudTrail
-        detail:
-          eventName:
-            - PutObject
-          requestParameters:
-            bucketName:
-              - !Ref CloudTrailBucketName
-      Targets:
-        - Arn: !Ref CloudTrailSNSTopic
-          Id: SendToSNS
+      RoleName: cloudtrail-forwarder-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: lambda-policy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub arn:aws:s3:::${S3BucketName}/*
+
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:SendMessageBatch
+                Resource:
+                  - !GetAtt USCompliantQueue.Arn
+                  - !GetAtt NonUSCompliantQueue.Arn
+                  - !GetAtt LambdaDLQ.Arn
+
+  CloudTrailProcessorLambda:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: cloudtrail-forwarder
+      Runtime: python3.11
+      Handler: index.lambda_handler
+      CodeUri: .
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 300
+      MemorySize: 512
+
+      Environment:
+        Variables:
+          EVENT_NAME_EXCLUDED_LIST: !Ref EventNameExcludedList
+          EVENT_ROLE_ARN_EXCLUDED_LIST: !Ref EventRoleArnExcludedList
+          US_COMPLIANT_ACCOUNTS: !Ref USCompliantAccounts
+          REGION_NAME: !Ref RegionName
+          US_COMPLIANT_QUEUE_URL: !Ref USCompliantQueue
+          NON_US_COMPLIANT_QUEUE_URL: !Ref NonUSCompliantQueue
+
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt LambdaDLQ.Arn
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CloudTrailProcessorLambda
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws:s3:::${S3BucketName}
 
 Outputs:
-  SNSTopicArn:
-    Value: !Ref CloudTrailSNSTopic
 
-  SQSQueueArn:
-    Value: !GetAtt CloudTrailSQSQueue.Arn
+  LambdaName:
+    Value: !Ref CloudTrailProcessorLambda
 
-  SQSQueueURL:
-    Value: !Ref CloudTrailSQSQueue
+  USQueueURL:
+    Value: !Ref USCompliantQueue
+
+  NonUSQueueURL:
+    Value: !Ref NonUSCompliantQueue
