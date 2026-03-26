@@ -6,7 +6,7 @@ Parameters:
 
   S3BucketName:
     Type: String
-    Default: aws-cloudtrail-logs-975050093323-4c9605b3
+    Default: jamf-global-cloudtrail-logs
 
   USCompliantAccounts:
     Type: String
@@ -29,12 +29,12 @@ Resources:
   LambdaDLQ:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: lambda-dlq
+      QueueName: jamf-secops-dlq
 
   USCompliantQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: us-compliant-queue
+      QueueName: jamf-us-compliant-queue
       VisibilityTimeout: 300
       MessageRetentionPeriod: 345600
       RedrivePolicy:
@@ -44,7 +44,7 @@ Resources:
   NonUSCompliantQueue:
     Type: AWS::SQS::Queue
     Properties:
-      QueueName: destination-test-queue
+      QueueName: jamf-us-non-compliant-queue
       VisibilityTimeout: 300
       MessageRetentionPeriod: 345600
       RedrivePolicy:
@@ -100,7 +100,7 @@ Resources:
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: cloudtrail-forwarder-role
+      RoleName: jamf-secops-lambda-role
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
