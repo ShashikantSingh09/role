@@ -30,6 +30,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: jamf-secops-dlq
+      SqsManagedSseEnabled: true
 
   USCompliantQueue:
     Type: AWS::SQS::Queue
@@ -37,6 +38,7 @@ Resources:
       QueueName: jamf-us-compliant-queue
       VisibilityTimeout: 300
       MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt LambdaDLQ.Arn
         maxReceiveCount: 5
@@ -47,6 +49,7 @@ Resources:
       QueueName: jamf-us-non-compliant-queue
       VisibilityTimeout: 300
       MessageRetentionPeriod: 345600
+      SqsManagedSseEnabled: true
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt LambdaDLQ.Arn
         maxReceiveCount: 5
