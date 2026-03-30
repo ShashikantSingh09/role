@@ -37,14 +37,14 @@ def lambda_handler(event, context):
     sqs = boto3.client("sqs", region_name=REGION_NAME)
 
     failed_records = []
-
     for record in event.get("Records", []):
-
         try:
+
             bucket = record["s3"]["bucket"]["name"]
             key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
 
             logger.info(f"Processing object: s3://{bucket}/{key}")
+
             account_id = get_account_id_from_key(key)
 
             if account_id:
@@ -83,6 +83,7 @@ def lambda_handler(event, context):
 
         except Exception as e:
             logger.exception("Error processing individual record")
+
             failed_records.append({
                 "record": record,
                 "error": str(e)
@@ -93,7 +94,6 @@ def lambda_handler(event, context):
     if failed_records:
         logger.error(f"{len(failed_records)} records failed processing")
 
-        # Raising exception ensures Lambda retry behavior
         raise Exception(json.dumps({
             "message": "Some records failed processing",
             "failed_count": len(failed_records)
