@@ -22,6 +22,14 @@ def normalize(value):
 
 
 def get_account_id_from_key(key):
+    """
+    Handles:
+    1. Standard CloudTrail:
+       AWSLogs/<ACCOUNT_ID>/...
+
+    2. Org CloudTrail:
+       AWSLogs/<ORG_ID>/<ACCOUNT_ID>/...
+    """
     parts = key.split("/")
 
     if "AWSLogs" not in parts:
@@ -31,11 +39,12 @@ def get_account_id_from_key(key):
     try:
         idx = parts.index("AWSLogs")
 
-        # Detect org trail
         if len(parts) > idx + 2 and parts[idx + 1].startswith("o-"):
             return normalize(parts[idx + 2])
+
         elif len(parts) > idx + 1:
             return normalize(parts[idx + 1])
+
         else:
             return None
 
@@ -53,52 +62,52 @@ def lambda_handler(event, context):
         sqs = boto3.client("sqs", region_name=REGION_NAME)
 
         normalized_accounts = [normalize(acc) for acc in US_COMPLIANT_ACCOUNTS]
-
         logger.info(f"Compliant accounts: {normalized_accounts}")
 
-        for record in event.get("Records", []):
+        # ✅ Use FIRST record only (event-level routing)
+        first_record = event.get("Records", [])[0]
 
-            try:
-                bucket = record["s3"]["bucket"]["name"]
-                key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+        bucket = first_record["s3"]["bucket"]["name"]
+        key = urllib.parse.unquote_plus(first_record["s3"]["object"]["key"])
 
-                logger.info(f"S3 Object: s3://{bucket}/{key}")
-                logger.info(f"S3 Key Parts: {key.split('/')}")
+        logger.info(f"S3 Object: s3://{bucket}/{key}")
+        logger.info(f"S3 Key Parts: {key.split('/')}")
 
-                account_id = get_account_id_from_key(key)
+        account_id = get_account_id_from_key(key)
 
-                logger.info(f"Extracted account_id: {repr(account_id)}")
+        logger.info(f"Extracted account_id: {repr(account_id)}")
 
-                is_compliant = account_id in normalized_accounts if account_id else False
+        is_compliant = account_id in normalized_accounts if account_id else False
 
-                logger.info(f"Final match result: {is_compliant}")
+        logger.info(f"Final match result: {is_compliant}")
 
-                if is_compliant:
-                    queue_url = US_COMPLIANT_QUEUE_URL
-                    queue_label = "US_COMPLIANT"
-                else:
-                    queue_url = NON_US_COMPLIANT_QUEUE_URL
-                    queue_label = "NON_US_COMPLIANT"
+        if is_compliant:
+            queue_url = US_COMPLIANT_QUEUE_URL
+            queue_label = "US_COMPLIANT"
+        else:
+            queue_url = NON_US_COMPLIANT_QUEUE_URL
+            queue_label = "NON_US_COMPLIANT"
 
-                logger.info(f"Routing to queue: {queue_label}")
+        logger.info(f"Routing to queue: {queue_label}")
+        message_body = json.dumps(event)
 
-                message_body = json.dumps({
-                    "Records": [record]
-                })
+        logger.info(f"Message size: {len(message_body)} bytes")
 
-                sqs.send_message(
-                    QueueUrl=queue_url,
-                    MessageBody=message_body
-                )
+        response = sqs.send_message(
+            QueueUrl=queue_url,
+            MessageBody=message_body
+        )
 
-                logger.info("Message sent successfully")
-
-            except Exception as e:
-                logger.exception(f"Error processing record: {e}")
-                continue
+        logger.info(f"Message sent. ID: {response['MessageId']}")
 
     except Exception as e:
         logger.exception("Fatal error in lambda")
-        return {"statusCode": 500, "body": str(e)}
+        return {
+            "statusCode": 500,
+            "body": str(e)
+        }
 
-    return {"statusCode": 200, "body": "Processing complete"}
+    return {
+        "statusCode": 200,
+        "body": "Processing complete"
+    }
