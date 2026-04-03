@@ -22,14 +22,7 @@ def normalize(value):
 
 
 def get_account_id_from_key(key):
-    """
-    Handles:
-    1. Standard CloudTrail:
-       AWSLogs/<ACCOUNT_ID>/...
 
-    2. Org CloudTrail:
-       AWSLogs/<ORG_ID>/<ACCOUNT_ID>/...
-    """
     parts = key.split("/")
 
     if "AWSLogs" not in parts:
