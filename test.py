@@ -8,7 +8,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 US_COMPLIANT_ACCOUNTS = [
-    str(acc).strip()
+    str(acc).strip().replace('"', '').replace("'", "")
     for acc in os.environ["US_COMPLIANT_ACCOUNTS"].split(",")
 ]
 
@@ -22,29 +22,31 @@ def normalize(value):
 
 
 def get_account_id_from_key(key):
-
     parts = key.split("/")
 
+    if "AWSLogs" not in parts:
+        logger.warning(f"AWSLogs not found in key: {key}")
+        return None
+
     try:
-        awslogs_index = parts.index("AWSLogs")
+        idx = parts.index("AWSLogs")
 
-        first = parts[awslogs_index + 1]
-
-        if first.startswith("o-"):
-            account_id = parts[awslogs_index + 2]
+        # Detect org trail
+        if len(parts) > idx + 2 and parts[idx + 1].startswith("o-"):
+            return normalize(parts[idx + 2])
+        elif len(parts) > idx + 1:
+            return normalize(parts[idx + 1])
         else:
-            account_id = first
+            return None
 
-        return normalize(account_id)
-
-    except (ValueError, IndexError):
-        logger.error(f"Failed to extract account ID from key: {key}")
+    except Exception as e:
+        logger.error(f"Error extracting account ID: {e}")
         return None
 
 
 def lambda_handler(event, context):
 
-    logger.info("===== NEW INVOCATION =====")
+    logger.info("Lambda execution started")
     logger.info(json.dumps(event))
 
     try:
@@ -56,48 +58,47 @@ def lambda_handler(event, context):
 
         for record in event.get("Records", []):
 
-            bucket = record["s3"]["bucket"]["name"]
-            key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
+            try:
+                bucket = record["s3"]["bucket"]["name"]
+                key = urllib.parse.unquote_plus(record["s3"]["object"]["key"])
 
-            logger.info(f"S3 Object: s3://{bucket}/{key}")
-            logger.info(f"S3 Key Parts: {key.split('/')}")
+                logger.info(f"S3 Object: s3://{bucket}/{key}")
+                logger.info(f"S3 Key Parts: {key.split('/')}")
 
-            account_id = get_account_id_from_key(key)
+                account_id = get_account_id_from_key(key)
 
-            logger.info(f"Extracted account_id: {repr(account_id)}")
+                logger.info(f"Extracted account_id: {repr(account_id)}")
 
-            is_compliant = account_id in normalized_accounts if account_id else False
+                is_compliant = account_id in normalized_accounts if account_id else False
 
-            logger.info(f"Final match result: {is_compliant}")
+                logger.info(f"Final match result: {is_compliant}")
 
-            if is_compliant:
-                queue_url = US_COMPLIANT_QUEUE_URL
-                queue_label = "US_COMPLIANT"
-            else:
-                queue_url = NON_US_COMPLIANT_QUEUE_URL
-                queue_label = "NON_US_COMPLIANT"
+                if is_compliant:
+                    queue_url = US_COMPLIANT_QUEUE_URL
+                    queue_label = "US_COMPLIANT"
+                else:
+                    queue_url = NON_US_COMPLIANT_QUEUE_URL
+                    queue_label = "NON_US_COMPLIANT"
 
-            logger.info(f"Routing to queue: {queue_label}")
+                logger.info(f"Routing to queue: {queue_label}")
 
-            message_body = json.dumps({
-                "Records": [record]
-            })
+                message_body = json.dumps({
+                    "Records": [record]
+                })
 
-            response = sqs.send_message(
-                QueueUrl=queue_url,
-                MessageBody=message_body
-            )
+                sqs.send_message(
+                    QueueUrl=queue_url,
+                    MessageBody=message_body
+                )
 
-            logger.info(f"Message sent. ID: {response['MessageId']}")
+                logger.info("Message sent successfully")
+
+            except Exception as e:
+                logger.exception(f"Error processing record: {e}")
+                continue
 
     except Exception as e:
-        logger.exception("Error processing event")
-        return {
-            "statusCode": 500,
-            "body": str(e)
-        }
+        logger.exception("Fatal error in lambda")
+        return {"statusCode": 500, "body": str(e)}
 
-    return {
-        "statusCode": 200,
-        "body": "Processing complete"
-    }
+    return {"statusCode": 200, "body": "Processing complete"}
